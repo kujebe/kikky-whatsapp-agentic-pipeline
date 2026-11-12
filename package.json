@@ -1,0 +1,18 @@
+{
+  "name": "kikky-whatsapp-agentic-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone deterministic catalog and shipping tools prototype",
+  "scripts": {
+    "init-db": "node scripts/init-db.js",
+    "test-tools": "node scripts/test-tools.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "zod": "^4.6.7"
+  }
+}
