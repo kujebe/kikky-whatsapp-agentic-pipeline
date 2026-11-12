@@ -1,7 +1,9 @@
 node_modules/
+data/kikky.sqlite
 data/*.sqlite
-data/*.sqlite-shm
-data/*.sqlite-wal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 .DS_Store
 .env
 .env.*
