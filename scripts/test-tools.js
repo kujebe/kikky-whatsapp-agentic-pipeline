@@ -4,7 +4,7 @@ const { openDatabase } = require('../src/db');
 const { seedTemporaryData } = require('../src/seed');
 const { createTools } = require('../src/tools');
 
-const toolNames = ['search_catalog', 'get_product_details', 'calculate_shipping'];
+const toolNames = ['search_catalog', 'get_product_details', 'calculate_shipping', 'escalate_to_human'];
 
 async function main() {
   const db = openDatabase();
@@ -20,16 +20,16 @@ async function main() {
   }
 
   console.log('Temporary data only. Enter a tool number and JSON arguments; q exits.');
-  console.log('1) search_catalog  2) get_product_details  3) calculate_shipping');
+  console.log('1) search_catalog  2) get_product_details  3) calculate_shipping  4) escalate_to_human');
 
   try {
     while (true) {
-      const choice = (await ask('\nTool [1-3/q]: ')).trim().toLowerCase();
+      const choice = (await ask('\nTool [1-4/q]: ')).trim().toLowerCase();
       if (choice === 'q') break;
 
       const index = Number(choice) - 1;
       if (!Number.isInteger(index) || !toolNames[index]) {
-        console.log('Choose 1, 2, 3, or q.');
+        console.log('Choose 1, 2, 3, 4, or q.');
         continue;
       }
 

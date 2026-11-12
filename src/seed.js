@@ -57,9 +57,13 @@ const products = [
 ];
 
 const deliveryZones = [
+  { state: 'Ondo', city: null, fee: 2500, estimated_days: '1-3' },
   { state: 'Ondo', city: 'Akure', fee: 1500, estimated_days: '1-2' },
+  { state: 'Lagos', city: null, fee: 6000, estimated_days: '2-5' },
   { state: 'Lagos', city: 'Lagos', fee: 5000, estimated_days: '2-4' },
-  { state: 'FCT', city: 'Abuja', fee: 7000, estimated_days: '3-5' }
+  { state: 'FCT', city: null, fee: 9000, estimated_days: '3-6' },
+  { state: 'FCT', city: 'Abuja', fee: 7000, estimated_days: '3-5' },
+  { state: 'Abuja', city: null, fee: 8500, estimated_days: '3-6' }
 ];
 
 function seedTemporaryData(db) {
@@ -70,8 +74,13 @@ function seedTemporaryData(db) {
       (@id, @name, @category, @description, @usage_summary, @retail_price, @min_price, @stock_quantity, @image_url)
   `);
   const insertDelivery = db.prepare(`
-    INSERT OR IGNORE INTO deliveries (state, city, fee, estimated_days)
-    VALUES (@state, @city, @fee, @estimated_days)
+    INSERT INTO deliveries (state, city, fee, estimated_days)
+    SELECT @state, @city, @fee, @estimated_days
+    WHERE NOT EXISTS (
+      SELECT 1 FROM deliveries
+      WHERE state = @state COLLATE NOCASE
+        AND ((city IS NULL AND @city IS NULL) OR city = @city COLLATE NOCASE)
+    )
   `);
 
   const seed = db.transaction(() => {

@@ -4,9 +4,9 @@ Standalone prototype for deterministic catalog and shipping tools. It has no Wha
 
 ## Temporary data warning
 
-The five products and three delivery zones are fixtures. Prices, stock, descriptions, shipping fees, and delivery estimates are not verified store data. Replace them with approved business data before using any result with customers. `usage_summary` is informational only and is not medical advice.
+The five products and seven shipping-rate rows are fixtures. They cover state baselines for Ondo, Lagos, FCT, and Abuja, plus city-specific rates for Akure, Lagos, and Abuja. Prices, stock, descriptions, shipping fees, and delivery estimates are not verified store data. Replace them with approved business data before using any result with customers. `usage_summary` is informational only and is not medical advice.
 
-Shipping lookup requires a state and can also take a city. Providing the city avoids ambiguity when a state has several delivery zones. Unknown zones return an error instead of a guessed fee.
+Shipping lookup requires a state and optionally accepts a city. It prefers a city-specific rate and falls back to the state's baseline. Unknown states return an escalation message instead of a guessed fee. The tools are exported from `src/tools/index.js`: `search_catalog`, `get_product_details`, `calculate_shipping`, and `escalate_to_human`.
 
 ## Setup
 
@@ -27,7 +27,10 @@ Examples:
 {"query":"massager","max_price":30000}
 {"product_id":"rose-massager-01"}
 {"state":"Ondo","city":"Akure"}
+{"reason":"customer_request","customer_summary":"Customer requested a staff member."}
 ```
+
+Select tools 1 through 4 in the harness; escalation creates a pending row in the local `handoffs` table.
 
 Set `DB_PATH` to use another SQLite file. The database uses WAL mode; this prototype assumes a single application instance and persistent local storage.
 

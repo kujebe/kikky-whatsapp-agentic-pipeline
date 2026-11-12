@@ -31,15 +31,73 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
     CREATE TABLE IF NOT EXISTS deliveries (
       id INTEGER PRIMARY KEY,
       state TEXT NOT NULL,
-      city TEXT NOT NULL,
+      city TEXT,
       fee INTEGER NOT NULL CHECK (fee >= 0),
       estimated_days TEXT NOT NULL,
       UNIQUE (state, city)
+    );
+    CREATE TABLE IF NOT EXISTS handoffs (
+      id TEXT PRIMARY KEY,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      reason TEXT NOT NULL,
+      customer_summary TEXT,
+      status TEXT DEFAULT 'pending'
     );
     CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
     CREATE INDEX IF NOT EXISTS idx_deliveries_state_city ON deliveries(state, city);
   `);
+
+  const cityColumn = db.prepare('PRAGMA table_info(deliveries)')
+    .all()
+    .find(column => column.name === 'city');
+
+  if (cityColumn?.notnull) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE deliveries_new (
+          id INTEGER PRIMARY KEY,
+          state TEXT NOT NULL,
+          city TEXT,
+          fee INTEGER NOT NULL CHECK (fee >= 0),
+          estimated_days TEXT NOT NULL,
+          UNIQUE (state, city)
+        );
+        INSERT INTO deliveries_new (id, state, city, fee, estimated_days)
+        SELECT id, state, city, fee, estimated_days FROM deliveries;
+        DROP TABLE deliveries;
+        ALTER TABLE deliveries_new RENAME TO deliveries;
+        CREATE INDEX IF NOT EXISTS idx_deliveries_state_city ON deliveries(state, city);
+      `);
+    })();
+  }
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(id, name, category, description);
+
+    CREATE TRIGGER IF NOT EXISTS products_fts_insert AFTER INSERT ON products BEGIN
+      INSERT INTO products_fts(rowid, id, name, category, description)
+      VALUES (new.rowid, new.id, new.name, new.category, new.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS products_fts_update AFTER UPDATE ON products BEGIN
+      DELETE FROM products_fts WHERE rowid = old.rowid;
+      INSERT INTO products_fts(rowid, id, name, category, description)
+      VALUES (new.rowid, new.id, new.name, new.category, new.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS products_fts_delete AFTER DELETE ON products BEGIN
+      DELETE FROM products_fts WHERE rowid = old.rowid;
+    END;
+  `);
+
+  db.transaction(() => {
+    db.exec('DELETE FROM products_fts');
+    db.exec(`
+      INSERT INTO products_fts(rowid, id, name, category, description)
+      SELECT rowid, id, name, category, description FROM products
+    `);
+  })();
 
   return db;
 }
