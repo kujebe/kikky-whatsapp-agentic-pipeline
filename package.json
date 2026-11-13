@@ -6,6 +6,7 @@
   "scripts": {
     "init-db": "node scripts/init-db.js",
     "test-tools": "node scripts/test-tools.js",
+    "test-multimodal": "node scripts/test-multimodal.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {
@@ -13,6 +14,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
     "zod": "^4.6.7"
   }
 }

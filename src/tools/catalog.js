@@ -49,7 +49,8 @@ function searchWithLike(db, terms, maxPrice) {
       parameters[parameter] = `%${variant.replace(/[\\%_]/g, '\\$&')}%`;
       return `(name LIKE @${parameter} ESCAPE '\\' COLLATE NOCASE
         OR category LIKE @${parameter} ESCAPE '\\' COLLATE NOCASE
-        OR description LIKE @${parameter} ESCAPE '\\' COLLATE NOCASE)`;
+        OR description LIKE @${parameter} ESCAPE '\\' COLLATE NOCASE
+        OR coalesce(search_tags, '') LIKE @${parameter} ESCAPE '\\' COLLATE NOCASE)`;
     });
     return `(${variantsSql.join(' OR ')})`;
   });

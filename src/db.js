@@ -25,7 +25,8 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
       retail_price INTEGER NOT NULL CHECK (retail_price >= 0),
       min_price INTEGER NOT NULL CHECK (min_price >= 0 AND min_price <= retail_price),
       stock_quantity INTEGER NOT NULL CHECK (stock_quantity >= 0),
-      image_url TEXT
+      image_url TEXT,
+      search_tags TEXT
     );
 
     CREATE TABLE IF NOT EXISTS deliveries (
@@ -72,18 +73,30 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
     })();
   }
 
+  // search_tags indexes colloquial customer terms, slang, and common typos in FTS5
+  // while keeping public-facing fields (name, description) sanitized.
+  const productColumns = db.prepare('PRAGMA table_info(products)').all();
+  if (!productColumns.some(column => column.name === 'search_tags')) {
+    db.exec('ALTER TABLE products ADD COLUMN search_tags TEXT');
+  }
+
+  const ftsColumns = db.prepare('PRAGMA table_info(products_fts)').all();
+  if (ftsColumns.length > 0 && !ftsColumns.some(column => column.name === 'search_tags')) {
+    db.exec('DROP TABLE products_fts');
+  }
+
   db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(id, name, category, description);
+    CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(id, name, category, description, search_tags);
 
     CREATE TRIGGER IF NOT EXISTS products_fts_insert AFTER INSERT ON products BEGIN
-      INSERT INTO products_fts(rowid, id, name, category, description)
-      VALUES (new.rowid, new.id, new.name, new.category, new.description);
+      INSERT INTO products_fts(rowid, id, name, category, description, search_tags)
+      VALUES (new.rowid, new.id, new.name, new.category, new.description, coalesce(new.search_tags, ''));
     END;
 
     CREATE TRIGGER IF NOT EXISTS products_fts_update AFTER UPDATE ON products BEGIN
       DELETE FROM products_fts WHERE rowid = old.rowid;
-      INSERT INTO products_fts(rowid, id, name, category, description)
-      VALUES (new.rowid, new.id, new.name, new.category, new.description);
+      INSERT INTO products_fts(rowid, id, name, category, description, search_tags)
+      VALUES (new.rowid, new.id, new.name, new.category, new.description, coalesce(new.search_tags, ''));
     END;
 
     CREATE TRIGGER IF NOT EXISTS products_fts_delete AFTER DELETE ON products BEGIN
@@ -94,8 +107,8 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
   db.transaction(() => {
     db.exec('DELETE FROM products_fts');
     db.exec(`
-      INSERT INTO products_fts(rowid, id, name, category, description)
-      SELECT rowid, id, name, category, description FROM products
+      INSERT INTO products_fts(rowid, id, name, category, description, search_tags)
+      SELECT rowid, id, name, category, description, coalesce(search_tags, '') FROM products
     `);
   })();
 

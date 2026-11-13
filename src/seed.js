@@ -1,3 +1,7 @@
+// search_tags bridges the gap between bank/compliance-friendly catalog names
+// (e.g. "Personal Massager") and raw customer vocabulary on WhatsApp (slang,
+// euphemisms, and common mobile typos like "vibrator", "vibrater", "lube", "dildo").
+// This column is indexed in FTS5 but never exposed to customers in search results.
 const products = [
   {
     id: 'rose-massager-01',
@@ -8,7 +12,8 @@ const products = [
     retail_price: 38000,
     min_price: 35000,
     stock_quantity: 5,
-    image_url: null
+    image_url: null,
+    search_tags: 'vibrator vibrater vibrators vibraters clitoral suction rose toy toys adult'
   },
   {
     id: 'pocket-massager-02',
@@ -19,7 +24,8 @@ const products = [
     retail_price: 22000,
     min_price: 22000,
     stock_quantity: 8,
-    image_url: null
+    image_url: null,
+    search_tags: 'vibrator vibrater vibrators vibraters bullet mini pocket toy toys adult'
   },
   {
     id: 'wellness-gel-03',
@@ -30,7 +36,8 @@ const products = [
     retail_price: 6500,
     min_price: 6000,
     stock_quantity: 12,
-    image_url: null
+    image_url: null,
+    search_tags: 'lube lubes lubricant lubricants gel gels moisture personal intimate'
   },
   {
     id: 'couples-cards-04',
@@ -41,7 +48,8 @@ const products = [
     retail_price: 12000,
     min_price: 11000,
     stock_quantity: 3,
-    image_url: null
+    image_url: null,
+    search_tags: 'game games card cards romance date night couples question questions conversation'
   },
   {
     id: 'silicone-accessory-05',
@@ -52,7 +60,8 @@ const products = [
     retail_price: 18000,
     min_price: 17000,
     stock_quantity: 0,
-    image_url: null
+    image_url: null,
+    search_tags: 'dildo dildos dildoo silicone strap toy toys wellness'
   }
 ];
 
@@ -68,10 +77,13 @@ const deliveryZones = [
 
 function seedTemporaryData(db) {
   const insertProduct = db.prepare(`
-    INSERT OR IGNORE INTO products
-      (id, name, category, description, usage_summary, retail_price, min_price, stock_quantity, image_url)
+    INSERT INTO products
+      (id, name, category, description, usage_summary, retail_price, min_price, stock_quantity, image_url, search_tags)
     VALUES
-      (@id, @name, @category, @description, @usage_summary, @retail_price, @min_price, @stock_quantity, @image_url)
+      (@id, @name, @category, @description, @usage_summary, @retail_price, @min_price, @stock_quantity, @image_url, @search_tags)
+    ON CONFLICT(id) DO UPDATE SET
+      search_tags = excluded.search_tags
+      WHERE products.search_tags IS NULL OR products.search_tags != excluded.search_tags
   `);
   const insertDelivery = db.prepare(`
     INSERT INTO deliveries (state, city, fee, estimated_days)

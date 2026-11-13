@@ -22,7 +22,30 @@ test('search finds a plural query and never exposes min_price', () => {
   assert.ok(rose);
   assert.equal(rose.name, 'Rose Personal Massager');
   assert.equal(rose.stock_quantity, 5);
-  for (const product of result.products) assert.equal('min_price' in product, false);
+  for (const product of result.products) {
+    assert.equal('min_price' in product, false);
+    assert.equal('search_tags' in product, false);
+  }
+});
+
+test('search finds products by colloquial terms and common typos via search_tags', () => {
+  const vibratorResult = tools.search_catalog({ query: 'vibrator' });
+  assert.equal(vibratorResult.ok, true);
+  assert.equal(vibratorResult.count, 2);
+
+  const typoResult = tools.search_catalog({ query: 'vibrater' });
+  assert.equal(typoResult.ok, true);
+  assert.equal(typoResult.count, 2);
+
+  const lubeResult = tools.search_catalog({ query: 'lube' });
+  assert.equal(lubeResult.ok, true);
+  assert.equal(lubeResult.count, 1);
+  assert.equal(lubeResult.products[0].id, 'wellness-gel-03');
+
+  const dildoResult = tools.search_catalog({ query: 'dildo' });
+  assert.equal(dildoResult.ok, true);
+  assert.equal(dildoResult.count, 1);
+  assert.equal(dildoResult.products[0].id, 'silicone-accessory-05');
 });
 
 test('search safely treats SQL wildcard characters as text', () => {

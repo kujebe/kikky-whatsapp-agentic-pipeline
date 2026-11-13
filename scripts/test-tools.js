@@ -46,7 +46,7 @@ async function main() {
       const startedAt = performance.now();
       const result = tools[name](args);
       console.log(`[TOOL] ${name}`);
-      console.log(`[INPUT] ${JSON.stringify(args)}`);
+      console.log(`[INPUT_FIELDS] ${JSON.stringify(Object.keys(args || {}))}`);
       console.log(`[DURATION] ${(performance.now() - startedAt).toFixed(2)} ms`);
       console.log(`[OUTPUT] ${JSON.stringify(result, null, 2)}`);
     }
