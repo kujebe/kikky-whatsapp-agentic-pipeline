@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import modal
 
-MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 MAX_ENCODED_BYTES = 16 * 1024 * 1024
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
@@ -32,7 +32,7 @@ image = (
     )
     .run_commands(
         "python -c \"from huggingface_hub import snapshot_download; "
-        "snapshot_download('Qwen/Qwen2.5-VL-3B-Instruct')\""
+        "snapshot_download('Qwen/Qwen2.5-VL-7B-Instruct')\""
     )
 )
 
@@ -272,14 +272,27 @@ def _normalize_kind(result: dict) -> str:
         if isinstance(key, str)
     }
     raw_kind = normalized_fields.get("type")
+
+    if raw_kind in {"payment_receipt", "receipt"} or any(k in normalized_fields for k in ("payment_receipt", "receipt")):
+        return "payment_receipt"
+
+    product_name = _find_named_value(result, {"product_name", "product", "name", "physical_intimate_product"})
+    bbox = _find_named_value(result, {"bbox", "bbox_2d", "box", "product_bbox", "bounding_box"})
+    if bbox is not None and isinstance(product_name, str) and product_name.strip():
+        name_lower = product_name.strip().casefold()
+        if any(term in name_lower for term in (
+            "dildo", "vibrator", "massager", "toy", "suction", "silicone", "lube", "lubricant",
+            "gel", "kegel", "lingerie", "strap", "wand", "bullet", "pleasure", "wellness",
+            "intimate", "adult",
+        )):
+            return "product_screenshot"
+
     if isinstance(raw_kind, str):
         normalized = raw_kind.strip().casefold()
         if normalized in {"product_screenshot", "payment_receipt", "general_media"}:
             return normalized
         if normalized in {"product", "product image", "product screenshot"}:
             return "product_screenshot"
-        if normalized in {"receipt", "payment receipt"}:
-            return "payment_receipt"
 
     if any(key in normalized_fields for key in ("physical_intimate_product", "product")):
         return "product_screenshot"
@@ -365,31 +378,51 @@ def _debug_pass_summary(value: dict, redact_values: bool = False) -> dict:
 
 
 FIRST_PASS_SYSTEM_PROMPT = (
-    "You are Kikky's visual classification engine for e-commerce and payments. "
+    "You are Kikky's visual inventory classification engine for an intimate wellness retail store. "
+    "Your top priority is detecting physical retail merchandise (such as dildos, vibrators, massagers, lubricants, intimate toys, games, and accessories) "
+    "and payment receipts, even in informal handheld photos, room pictures, or social media screenshots. "
     "You must output strictly valid JSON conforming to the requested schema. "
     "Never output conversational text, markdown formatting, or unrequested keys."
 )
 
 FIRST_PASS_INSTRUCTION = (
     "Classify this image into one of three categories:\n"
-    "1. \"product_screenshot\": An image, photo, or screenshot showing a physical retail product (e.g. adult wellness items, dildos, vibrators, massagers, lubricants, lingerie, toys). Even if held by a person, shown in a hand, or displayed in real-world use, if an adult wellness or retail product is present, classify as \"product_screenshot\".\n"
-    "2. \"payment_receipt\": A screenshot or photo of a bank transfer receipt or payment confirmation (e.g. OPAY, PalmPay, Moniepoint, Kuda, bank transfer slips).\n"
-    "3. \"general_media\": Any other image containing no retail products or payment slips (e.g. regular personal selfies without products, general memes, outdoor landscapes, text chats).\n\n"
-    "If product_screenshot, detect the primary physical product and output its bounding box as \"bbox_2d\": [x1, y1, x2, y2] normalized between 0 and 1000 relative to full image width and height, where (x1, y1) is top-left and (x2, y2) is bottom-right. Focus the bounding box directly on the product itself. If multiple items form one product set, enclose the full set. Ignore social media buttons, watermarks, likes, comments, and price overlays.\n\n"
-    "If payment_receipt, extract unverified candidate fields: \"amount\" (number or null), \"bank\" (string or null), \"sender\" (string or null), \"date\" (string or null).\n\n"
-    "Return strictly one JSON object matching this schema:\n"
-    "{\"type\":\"product_screenshot\"|\"payment_receipt\"|\"general_media\",\"confidence\":0.0 to 1.0,\"bbox_2d\":[x1,y1,x2,y2],\"product_name\":\"short visible name\"}"
+    "1. \"product_screenshot\": An image, photo, or screenshot showing a physical retail product "
+    "(e.g. adult wellness items, dildos, vibrators, massagers, lubricants, lingerie, toys). "
+    "This applies even when the item is held by a hand, shown in a room, laid on a bed, or photographed from a social media post.\n"
+    "CRITICAL RULES for product_screenshot:\n"
+    "  - If ANY intimate wellness product, adult toy, lubricant, or retail merchandise is visible — even partially — "
+    "output type=\"product_screenshot\". Do NOT output \"general_media\" because a person is also present.\n"
+    "  - Examples that MUST be classified as \"product_screenshot\": a hand holding a dildo, a vibrator on a nightstand, "
+    "a lube bottle on a shelf, an adult toy in its packaging, a rose-shaped massager on a table.\n"
+    "  - Bounding Box (\"bbox_2d\"): Draw the box tightly around the retail item only. "
+    "Exclude human hands, fingers, faces, phone frames, screen bezels, and app UI elements. "
+    "Values are normalized 0–1000 relative to full image dimensions; (x1,y1) top-left, (x2,y2) bottom-right.\n"
+    "  - product_name: A short, literal description of the ITEM only (e.g. \"red dildo\", \"rose vibrator\", \"bullet massager\"). "
+    "Do NOT set product_name to \"general_media\" or any category label.\n\n"
+    "2. \"payment_receipt\": A screenshot or photo of a bank transfer receipt or payment confirmation "
+    "(e.g. OPAY, PalmPay, Moniepoint, Kuda, bank transfer slips). "
+    "If payment_receipt, extract candidate fields: \"amount\" (number or null), \"bank\" (string or null), "
+    "\"sender\" (string or null), \"date\" (string or null).\n\n"
+    "3. \"general_media\": ONLY use this when the image contains NO retail products, NO adult wellness items, "
+    "and NO payment slips. Examples: plain selfies with no items, memes, landscapes, text chat screenshots.\n\n"
+    "Return strictly one JSON object:\n"
+    "{\"type\":\"product_screenshot\"|\"payment_receipt\"|\"general_media\",\"confidence\":0.0–1.0,"
+    "\"bbox_2d\":[x1,y1,x2,y2],\"product_name\":\"short literal item name\"}"
 )
 
 SECOND_PASS_SYSTEM_PROMPT = (
-    "You are an e-commerce catalog search indexing engine. Extract concise, searchable product keywords from the image crop. Output strictly valid JSON."
+    "You are an e-commerce catalog search indexing engine for Kikky's intimate wellness store. "
+    "Extract concise, searchable product keywords from the image crop. Output strictly valid JSON."
 )
 
 SECOND_PASS_INSTRUCTION = (
     "Identify the physical product in this cropped image.\n"
     "Provide 2 to 6 short, high-precision search keywords (e.g. product category, common product name, primary material, shape).\n"
     "Rules:\n"
-    "- Each keyword must be 1 to 3 words maximum (e.g. \"rose vibrator\", \"bullet massager\", \"silicone wand\").\n"
+    "- Each keyword must be 1 to 3 words maximum (e.g. \"rose vibrator\", \"bullet massager\", \"silicone wand\", \"personal lubricant\").\n"
+    "- Focus exclusively on the physical consumer merchandise.\n"
+    "- NEVER output words describing electronic devices, screens, or UI (e.g. do NOT output 'smartphone', 'phone', 'touchscreen', 'display', 'screen', 'electronics', 'monitor', 'screenshot', 'hand', 'person', 'finger').\n"
     "- Do not include conversational filler, subjective opinions, or inferred medical claims.\n"
     "- Ignore background artifacts or cut-off text.\n\n"
     "Return strictly JSON:\n"
@@ -446,6 +479,66 @@ def classify_image_bytes(raw: bytes, request_id: str | None = None, debug: bool 
     kind = kind_hint
     confidence = _normalize_confidence(first_pass)
     bbox = _normalize_product_bbox(first_pass, full_image.width, full_image.height) if kind == "product_screenshot" else None
+
+    # Rescue pass: model said general_media but returned a bbox covering ≥25% of the image.
+    # The 3B model's safety filters refuse to label intimate items as products even when it
+    # correctly detects them. Instead of asking a binary question (which also gets filtered),
+    # we crop the bbox region and run keyword extraction directly. If the keywords are
+    # non-empty and not pure person/body terms, the item is real retail merchandise.
+    _PERSON_ONLY_TERMS = {
+        "person", "woman", "man", "girl", "boy", "face", "head", "portrait",
+        "selfie", "human", "people", "body", "smile", "hair", "eye", "nose",
+        "hand", "finger", "arm", "crowd",
+    }
+    if kind == "general_media":
+        raw_bbox = _find_named_value(first_pass, {"bbox", "bbox_2d", "box", "product_bbox", "bounding_box"})
+        if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
+            parsed_rescue = _parse_bbox(raw_bbox, full_image.width, full_image.height)
+            if parsed_rescue is not None:
+                bw = parsed_rescue[2] - parsed_rescue[0]
+                bh = parsed_rescue[3] - parsed_rescue[1]
+                area_fraction = (bw * bh) / (full_image.width * full_image.height)
+                if area_fraction >= 0.25:
+                    _log_event("vision.pass.started", request_id, stage="rescue_classify")
+                    try:
+                        rescue_crop = full_image.crop(parsed_rescue)
+                        rescue_kw_result = _generate_json(
+                            rescue_crop, SECOND_PASS_INSTRUCTION, request_id,
+                            system_prompt=SECOND_PASS_SYSTEM_PROMPT
+                        )
+                        _log_event("vision.pass.completed", request_id, stage="rescue_classify", outcome="success")
+                        rescue_keywords = _normalize_keywords(rescue_kw_result)
+                        # Accept rescue if at least one keyword is not a pure person/body term
+                        non_person_kws = [
+                            kw for kw in rescue_keywords
+                            if not all(tok in _PERSON_ONLY_TERMS for tok in kw.lower().split())
+                        ]
+                        if non_person_kws:
+                            kind = "product_screenshot"
+                            bbox = parsed_rescue
+                            _log_event("vision.pass.decision", request_id, stage="rescue_classify",
+                                       result_type="product_screenshot", confidence=confidence, bbox_valid=True)
+                            # Short-circuit: return product_screenshot with the rescue keywords now
+                            # (skip the normal second pass — keywords already extracted)
+                            product_result = {"type": "product_screenshot", "keywords": non_person_kws}
+                            if confidence is not None:
+                                product_result["confidence"] = confidence
+                            _log_event(
+                                "vision.request.completed", request_id,
+                                outcome="success", result_type="product_screenshot",
+                                keyword_count=len(non_person_kws),
+                                duration_ms=(time.perf_counter() - started_at) * 1000,
+                            )
+                            if debug:
+                                product_result["debug"] = debug_output
+                            return product_result
+                        else:
+                            _log_event("vision.pass.decision", request_id, stage="rescue_classify",
+                                       result_type="general_media", confidence=confidence, bbox_valid=False)
+                    except Exception:
+                        _log_event("vision.pass.failed", request_id, stage="rescue_classify",
+                                   outcome="error", error_code="rescue_failed")
+
     _log_event(
         "vision.pass.decision",
         request_id,
@@ -509,14 +602,46 @@ def classify_image_bytes(raw: bytes, request_id: str | None = None, debug: bool 
     )
     debug_output["second_pass"] = _debug_pass_summary(keyword_result)
     clean_keywords = _normalize_keywords(keyword_result)
+
+    # Always seed keywords with product_name from first pass (7B names it correctly
+    # even when second-pass keyword extraction is safety-filtered or returns deflections).
+    # Merge: product_name phrase first, then second-pass keywords, deduped.
+    raw_product_name = _find_named_value(first_pass, {"product_name", "name", "label"})
+    product_name_str = _string_or_none(raw_product_name, 120) if raw_product_name else None
+    if product_name_str:
+        pn = product_name_str.strip().lower()
+        # Only prepend if it looks like a real product name (not a category label or empty)
+        _GENERIC_LABELS = {"general_media", "product", "item", "object", "image", "photo", "unknown", ""}
+        if pn not in _GENERIC_LABELS:
+            if pn not in clean_keywords:
+                clean_keywords = [pn] + clean_keywords
+
     if not clean_keywords:
-        _log_event("vision.pass.failed", request_id, stage="extract_crop_keywords", outcome="error", error_code="no_keywords")
-        return finish({
-            "ok": False,
-            "error": "Product detected but keyword extraction returned empty",
-            "error_code": "no_keywords",
-            "type": "product_screenshot",
-        }, "no_keywords")
+        # Second pass returned empty (safety filter or crop artifact).
+        # Fall back to tokenizing product_name from first pass — the 7B model
+        # correctly names the product there even when keyword extraction is filtered.
+        raw_product_name = _find_named_value(first_pass, {"product_name", "name", "label"})
+        product_name_str = _string_or_none(raw_product_name, 120) if raw_product_name else None
+        if product_name_str:
+            # Split "pink dildo" → ["pink dildo"] (keep as single phrase if ≤3 tokens)
+            tokens = product_name_str.strip().lower().split()
+            if len(tokens) <= 3:
+                clean_keywords = [product_name_str.strip().lower()]
+            else:
+                # Long name: use bigrams to form 2-3 word phrases
+                clean_keywords = [" ".join(tokens[i:i+2]) for i in range(0, len(tokens) - 1, 2)]
+            _log_event(
+                "vision.pass.decision", request_id, stage="extract_crop_keywords",
+                outcome="fallback_to_product_name", keyword_count=len(clean_keywords),
+            )
+        else:
+            _log_event("vision.pass.failed", request_id, stage="extract_crop_keywords", outcome="error", error_code="no_keywords")
+            return finish({
+                "ok": False,
+                "error": "Product detected but keyword extraction returned empty",
+                "error_code": "no_keywords",
+                "type": "product_screenshot",
+            }, "no_keywords")
 
     product_result = {
         "type": "product_screenshot",

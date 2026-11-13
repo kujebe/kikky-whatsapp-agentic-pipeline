@@ -32,10 +32,10 @@ function makeSearchTerms(query) {
   return query.toLocaleLowerCase('en-NG').match(/[\p{L}\p{N}]+/gu) || [];
 }
 
-function makeFtsQuery(terms) {
+function makeFtsQuery(terms, operator = 'AND') {
   return terms
     .map(term => `(${tokenVariants(term).map(variant => `"${variant.replaceAll('"', '""')}"*`).join(' OR ')})`)
-    .join(' AND ');
+    .join(` ${operator} `);
 }
 
 function searchWithLike(db, terms, maxPrice) {
@@ -56,12 +56,24 @@ function searchWithLike(db, terms, maxPrice) {
   });
 
   parameters.maxPrice = maxPrice ?? null;
-  return db.prepare(`
+  const andRows = db.prepare(`
     SELECT id, name, category, retail_price, stock_quantity
     FROM products
     WHERE ${wordConditions.join(' AND ')}
       AND (@maxPrice IS NULL OR retail_price <= @maxPrice)
     ORDER BY name COLLATE NOCASE
+    LIMIT 20
+  `).all(parameters).map(withoutEmptyFields);
+
+  if (andRows.length > 0 || terms.length <= 1) return andRows;
+
+  const matchScoreSql = wordConditions.map(cond => `(CASE WHEN ${cond} THEN 1 ELSE 0 END)`).join(' + ');
+  return db.prepare(`
+    SELECT id, name, category, retail_price, stock_quantity
+    FROM products
+    WHERE (${wordConditions.join(' OR ')})
+      AND (@maxPrice IS NULL OR retail_price <= @maxPrice)
+    ORDER BY (${matchScoreSql}) DESC, name COLLATE NOCASE
     LIMIT 20
   `).all(parameters).map(withoutEmptyFields);
 }
@@ -77,7 +89,8 @@ function createCatalogTools(db) {
         const terms = makeSearchTerms(query);
         if (terms.length === 0) return { ok: true, count: 0, products: [] };
 
-        const ftsRows = db.prepare(`
+        const andQuery = makeFtsQuery(terms, 'AND');
+        let ftsRows = db.prepare(`
           SELECT p.id, p.name, p.category, p.retail_price, p.stock_quantity
           FROM products_fts
           JOIN products AS p ON p.rowid = products_fts.rowid
@@ -85,7 +98,21 @@ function createCatalogTools(db) {
             AND (@maxPrice IS NULL OR p.retail_price <= @maxPrice)
           ORDER BY p.name COLLATE NOCASE
           LIMIT 20
-        `).all({ ftsQuery: makeFtsQuery(terms), maxPrice: maxPrice ?? null });
+        `).all({ ftsQuery: andQuery, maxPrice: maxPrice ?? null });
+
+        if (ftsRows.length === 0 && terms.length > 1) {
+          const orQuery = makeFtsQuery(terms, 'OR');
+          ftsRows = db.prepare(`
+            SELECT p.id, p.name, p.category, p.retail_price, p.stock_quantity
+            FROM products_fts
+            JOIN products AS p ON p.rowid = products_fts.rowid
+            WHERE products_fts MATCH @ftsQuery
+              AND (@maxPrice IS NULL OR p.retail_price <= @maxPrice)
+            ORDER BY bm25(products_fts), p.name COLLATE NOCASE
+            LIMIT 20
+          `).all({ ftsQuery: orQuery, maxPrice: maxPrice ?? null });
+        }
+
         const products = ftsRows.length > 0 ? ftsRows.map(withoutEmptyFields) : searchWithLike(db, terms, maxPrice);
         return { ok: true, count: products.length, products };
       } catch {

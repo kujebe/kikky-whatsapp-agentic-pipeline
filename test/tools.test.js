@@ -48,6 +48,13 @@ test('search finds products by colloquial terms and common typos via search_tags
   assert.equal(dildoResult.products[0].id, 'silicone-accessory-05');
 });
 
+test('search falls back to best-match ranking when queries contain non-catalog or device words', () => {
+  const result = tools.search_catalog({ query: 'rose massager pink phone' });
+  assert.equal(result.ok, true);
+  assert.ok(result.products.length > 0);
+  assert.equal(result.products[0].id, 'rose-massager-01');
+});
+
 test('search safely treats SQL wildcard characters as text', () => {
   const result = tools.search_catalog({ query: '%' });
   assert.equal(result.ok, true);
