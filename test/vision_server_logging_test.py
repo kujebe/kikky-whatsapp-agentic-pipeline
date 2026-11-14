@@ -28,7 +28,8 @@ class FakeImage:
 
 class FakeApp:
     def __init__(self, *args, **kwargs):
-        pass
+        self.args = args
+        self.kwargs = kwargs
 
     def function(self, *args, **kwargs):
         return lambda function: function

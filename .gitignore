@@ -10,3 +10,4 @@ __pycache__/
 .env
 .env.*
 !.env.example
+kikky_live_chats/

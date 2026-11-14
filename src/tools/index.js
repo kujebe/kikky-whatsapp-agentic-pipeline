@@ -2,12 +2,16 @@ const { createRequestId, logEvent } = require('../logger');
 const { createCatalogTools } = require('./catalog');
 const { createShippingTool } = require('./shipping');
 const { createEscalationTool } = require('./escalation');
+const { checkStoreHours } = require('./store_hours');
+const { recordWaitlistRequest } = require('./waitlist');
 
 function createTools(db, { emit = logEvent } = {}) {
   const handlers = {
     ...createCatalogTools(db),
     calculate_shipping: createShippingTool(db),
-    escalate_to_human: createEscalationTool(db)
+    escalate_to_human: createEscalationTool(db),
+    check_store_hours: (input) => checkStoreHours(db, input),
+    record_waitlist_request: (input) => recordWaitlistRequest(db, input)
   };
 
   return Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (input) => {
@@ -53,5 +57,7 @@ module.exports = {
   createTools,
   createCatalogTools,
   createShippingTool,
-  createEscalationTool
+  createEscalationTool,
+  checkStoreHours,
+  recordWaitlistRequest
 };

@@ -7,6 +7,7 @@
     "init-db": "node scripts/init-db.js",
     "test-tools": "node scripts/test-tools.js",
     "test-multimodal": "node scripts/test-multimodal.js",
+    "simulate": "node scripts/simulate-chat.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {

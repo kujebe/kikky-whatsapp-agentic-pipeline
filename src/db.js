@@ -44,9 +44,50 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
       customer_summary TEXT,
       status TEXT DEFAULT 'pending'
     );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id TEXT PRIMARY KEY,
+      customer_phone TEXT,
+      customer_name TEXT,
+      gender TEXT CHECK (gender IN ('female', 'male', 'unknown')) DEFAULT 'unknown',
+      referral_source TEXT,
+      order_stage TEXT DEFAULT 'browsing',
+      active_cart_json TEXT DEFAULT '{}',
+      delivery_state TEXT,
+      delivery_city TEXT,
+      delivery_address TEXT,
+      price_sensitivity TEXT DEFAULT 'normal',
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS store_hours (
+      id INTEGER PRIMARY KEY,
+      day_of_week TEXT NOT NULL UNIQUE,
+      is_open INTEGER NOT NULL CHECK (is_open IN (0, 1)),
+      open_time TEXT,
+      close_time TEXT,
+      notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS waitlist (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      customer_contact TEXT NOT NULL,
+      requested_item TEXT NOT NULL,
+      specifications TEXT,
+      deposit_offered INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
     CREATE INDEX IF NOT EXISTS idx_deliveries_state_city ON deliveries(state, city);
+    CREATE INDEX IF NOT EXISTS idx_sessions_phone ON sessions(customer_phone);
+    CREATE INDEX IF NOT EXISTS idx_waitlist_contact ON waitlist(customer_contact);
+    CREATE INDEX IF NOT EXISTS idx_store_hours_day ON store_hours(day_of_week);
   `);
 
   const cityColumn = db.prepare('PRAGMA table_info(deliveries)')

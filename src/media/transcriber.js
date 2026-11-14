@@ -1,7 +1,7 @@
 const { createRequestId, logEvent } = require('../logger');
 
-const GROQ_TRANSCRIPTION_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const DEFAULT_PROMPT = 'Customer voice note at Kikky adult store in Akure. Inquiries about personal massagers, clit lickers, rose suckers, vibrators, lubricants, wellness accessories, delivery, and Moniepoint payments.';
+const GROQ_TRANSCRIPTION_URL = process.env.GROQ_TRANSCRIPTION_URL || 'https://api.groq.com/openai/v1/audio/transcriptions';
+const DEFAULT_PROMPT = process.env.TRANSCRIPTION_CONTEXT_PROMPT || 'Customer voice note at Kikky adult store in Akure. Inquiries about personal massagers, clit lickers, rose suckers, vibrators, lubricants, wellness accessories, delivery, and Moniepoint payments.';
 const MIN_AUDIO_BYTES = 1024;
 const DEFAULT_MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
