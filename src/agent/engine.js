@@ -223,6 +223,27 @@ function extractFallbackToolCalls(content = '') {
   return { calls: null, cleanText: content };
 }
 
+function deduplicateTrailingEmojis(content = '') {
+  if (!content || typeof content !== 'string') return '';
+  const lines = content.split('\n');
+  const trailingEmojiRegex = /([\p{Extended_Pictographic}]+)\s*$/u;
+  const seenTrailing = new Set();
+  const cleaned = lines.map(line => {
+    // Preserve lowball running emojis defense
+    if (line.includes('🏃')) return line;
+    const match = line.match(trailingEmojiRegex);
+    if (match) {
+      const emoji = match[1];
+      if (seenTrailing.has(emoji)) {
+        return line.replace(trailingEmojiRegex, '').trimEnd();
+      }
+      seenTrailing.add(emoji);
+    }
+    return line;
+  });
+  return cleaned.join('\n');
+}
+
 function sanitizeCustomerFacingOutput(rawText = '', options = {}) {
   if (!rawText || typeof rawText !== 'string') {
     return '';
@@ -247,7 +268,17 @@ function sanitizeCustomerFacingOutput(rawText = '', options = {}) {
     .replace(/₹/g, '₦')
     .replace(/\b(?:Rs\.?|INR)\s*([0-9])/gi, '₦$1')
     .replace(/\$([0-9])/g, '₦$1')
+    // Bank details formatting: Ensure bank name is strictly Moniepoint MFB
+    .replace(/Bank:\s*(?:MFB|Moniepoint)\b(?!\s*MFB)/gi, 'Bank: Moniepoint MFB')
+    .replace(/Bank:\s*MFB\b/gi, 'Bank: Moniepoint MFB')
+    // Strip leaked server/config syntax artifacts (such as /nginx, nginx, orphaned braces or code blocks)
+    .replace(/(?:\/?nginx|\bnginx\b)[\s\S]*?(?:\}|$)/gi, '')
+    .replace(/^[\s/]*nginx[\s\S]*$/gim, '')
+    .replace(/^\s*[\{\}]\s*$/gm, '')
     .trim();
+
+  // Dynamic emoji anti-spam: Prevent robotic trailing repetition while preserving natural mid-sentence emojis
+  text = deduplicateTrailingEmojis(text).trim();
 
   if (!text && hadContent && options.fallbackIfEmpty !== false) {
     return TOOL_PENDING_REPLY;
@@ -368,6 +399,60 @@ async function runAgentTurn({
       }
     }
 
+    // Intercept lazy promissory replies (such as "I'll check the catalog for you") and trigger immediate execution
+    if ((!toolCalls || toolCalls.length === 0) && assistantMessage.content && currentStep === 1) {
+      const isLazyCatalog = /(?:I'll|let me|will)\s+check\s+(?:the\s+)?(?:catalog|stock|inventory|options|for you)/i.test(assistantMessage.content);
+      const isLazyShipping = /(?:I'll|let me|will)\s+check\s+(?:the\s+)?(?:shipping|delivery|dispatch|cost|rate)/i.test(assistantMessage.content);
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+      const isManagerRequest = /(?:talk to|speak (?:to|with)|call)\s+(?:the\s+)?(?:manager|human|real person|staff)|are you (?:a\s+)?robot/i.test(lastUserMsg);
+
+      if (isLazyCatalog || isLazyShipping || isManagerRequest) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy turn or customer manager request, promoting to immediate tool execution');
+        if (isManagerRequest) {
+          toolCalls = [{
+            id: `call_lazy_esc_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: 'escalate_to_human',
+              arguments: JSON.stringify({
+                reason: 'Customer requested human manager',
+                customer_summary: lastUserMsg
+              })
+            }
+          }];
+          assistantMessage.tool_calls = toolCalls;
+          assistantMessage.content = null;
+        } else if (isLazyCatalog) {
+          const cleanQuery = lastUserMsg.replace(/[?!.]/g, '').replace(/^(?:some|any|what|can you suggest)\s+/i, '').trim() || 'massager';
+          toolCalls = [{
+            id: `call_lazy_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: 'search_catalog',
+              arguments: JSON.stringify({ query: cleanQuery })
+            }
+          }];
+          assistantMessage.tool_calls = toolCalls;
+          assistantMessage.content = null;
+        } else if (isLazyShipping) {
+          const knownLocations = ['sagamu', 'ibadan', 'akure', 'lagos', 'abuja', 'osogbo', 'ondo', 'oyo', 'osun', 'ogun', 'kano', 'benin', 'enugu', 'port harcourt', 'calabar'];
+          const lower = lastUserMsg.toLowerCase();
+          const foundLoc = knownLocations.find(l => lower.includes(l)) || 'Ondo';
+          const capitalized = foundLoc.charAt(0).toUpperCase() + foundLoc.slice(1);
+          toolCalls = [{
+            id: `call_lazy_ship_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: 'calculate_shipping',
+              arguments: JSON.stringify({ state: capitalized, city: capitalized })
+            }
+          }];
+          assistantMessage.tool_calls = toolCalls;
+          assistantMessage.content = null;
+        }
+      }
+    }
+
     if (assistantMessage.content) {
       assistantMessage.content = sanitizeCustomerFacingOutput(assistantMessage.content);
     }
@@ -425,6 +510,42 @@ async function runAgentTurn({
         escalated = true;
       }
 
+      // Real Escalation Invariant: If calculate_shipping fails because destination is unlisted, ensure escalate_to_human is recorded
+      if (toolName === 'calculate_shipping' && toolResult && !toolResult.ok && toolResult.error && toolResult.error.includes('Shipping not available')) {
+        const escalateExecutor = toolExecutors['escalate_to_human'];
+        if (typeof escalateExecutor === 'function' && !executedSteps.some(s => s.tool === 'escalate_to_human')) {
+          const loc = parsedArgs.city || parsedArgs.state || 'unlisted destination';
+          const escInput = {
+            reason: `Unlisted delivery destination: ${loc}`,
+            customer_summary: `Customer requested shipping to ${loc} which is outside regular rider dispatch.`
+          };
+          const escStart = performance.now();
+          let escResult;
+          try {
+            escResult = await escalateExecutor(escInput);
+          } catch (escErr) {
+            escResult = { ok: false, error: escErr.message };
+          }
+          if (escResult?.ok) {
+            escalated = true;
+          }
+          const escStepRecord = {
+            step: currentStep,
+            tool: 'escalate_to_human',
+            input: escInput,
+            output: escResult,
+            durationMs: Math.round(performance.now() - escStart)
+          };
+          executedSteps.push(escStepRecord);
+          logDiagnostic(debug, `REAL ESCALATION escalate_to_human (${escStepRecord.durationMs}ms)`, escResult);
+          conversationHistory.push({
+            role: 'tool',
+            tool_call_id: `call_auto_esc_${Date.now()}`,
+            content: JSON.stringify(escResult)
+          });
+        }
+      }
+
       logDiagnostic(debug, `TOOL RESULT ${toolName} (${stepRecord.durationMs}ms)`, toolResult);
 
       conversationHistory.push({
@@ -470,6 +591,7 @@ module.exports = {
   DEFAULT_MAX_STEPS,
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT_MS,
+  deduplicateTrailingEmojis,
   extractFallbackToolCalls,
   formatWhatsAppReplies,
   parseToolArguments,

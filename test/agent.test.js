@@ -5,7 +5,7 @@ const { openDatabase } = require('../src/db');
 const { seedTemporaryData } = require('../src/seed');
 const { getSystemPrompt } = require('../src/agent/prompt');
 const { getToolDefinitions } = require('../src/agent/tools');
-const { runAgentTurn, parseToolArguments, sanitizeCustomerFacingOutput } = require('../src/agent/engine');
+const { runAgentTurn, parseToolArguments, sanitizeCustomerFacingOutput, deduplicateTrailingEmojis } = require('../src/agent/engine');
 const {
   dispatchTextTurn,
   dispatchAudioTurn,
@@ -607,6 +607,194 @@ test('when user tries to negotiate price, agent holds retail_price firm and does
   assert.doesNotMatch(result.reply, /free delivery/i);
   assert.doesNotMatch(result.reply, /₹/);
   assert.equal(result.escalated, false);
+
+  db.close();
+});
+
+test('immediate tool execution intercepts lazy promissory turns and executes tool immediately', async () => {
+  const db = createInMemoryTestDb();
+
+  const mockFetch = createMockFetch([
+    // Step 1: Model tries to be lazy and promises to check catalog later without calling tool
+    {
+      message: {
+        role: 'assistant',
+        content: "Great choice! Let me check the catalog for you.",
+        tool_calls: null
+      }
+    },
+    // Step 2: Because engine intercepted and promoted to search_catalog, step 2 receives tool results
+    {
+      message: {
+        role: 'assistant',
+        content: "We have the Rose Personal Massager for ₦30,000 in stock.",
+        tool_calls: null
+      }
+    }
+  ]);
+
+  const result = await runAgentTurn({
+    messages: [{ role: 'user', content: 'some pleasure toy?' }],
+    db,
+    options: { apiKey: 'test', fetchClient: mockFetch }
+  });
+
+  // Step was intercepted and executed
+  assert.equal(result.steps.length, 1);
+  assert.equal(result.steps[0].tool, 'search_catalog');
+  assert.match(result.reply, /Rose Personal Massager/);
+  assert.doesNotMatch(result.reply, /Let me check the catalog/);
+
+  db.close();
+});
+
+test('real escalation: calculate_shipping error on unlisted destination triggers escalate_to_human and sets escalated=true', async () => {
+  const db = createInMemoryTestDb();
+
+  const mockFetch = createMockFetch([
+    // Step 1: Model calls calculate_shipping for Sagamu (Ogun)
+    {
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_ship_sagamu',
+            type: 'function',
+            function: {
+              name: 'calculate_shipping',
+              arguments: JSON.stringify({ state: 'Ogun', city: 'Sagamu' })
+            }
+          }
+        ]
+      }
+    },
+    // Step 2: Model provides customer reply explaining dispatch zone
+    {
+      message: {
+        role: 'assistant',
+        content: 'Sagamu is outside our regular rider dispatch zone ma. Let me have staff check park delivery rates for you.',
+        tool_calls: null
+      }
+    }
+  ]);
+
+  const result = await runAgentTurn({
+    messages: [{ role: 'user', content: 'delivery to Sagamu please' }],
+    db,
+    options: { apiKey: 'test', fetchClient: mockFetch }
+  });
+
+  // Verify real escalation was triggered
+  assert.equal(result.escalated, true);
+  const escStep = result.steps.find(s => s.tool === 'escalate_to_human');
+  assert.ok(escStep, 'escalate_to_human must be in executed steps');
+  assert.equal(escStep.output.ok, true);
+  assert.match(escStep.input.reason, /Unlisted delivery destination: Sagamu/);
+
+  // Check database handoff record exists
+  const handoff = db.prepare('SELECT * FROM handoffs WHERE id = ?').get(escStep.output.handoff_id);
+  assert.ok(handoff, 'handoff record must exist in database');
+  assert.match(handoff.reason, /Sagamu/);
+
+  db.close();
+});
+
+test('accurate bank details: Bank name is strictly Moniepoint MFB and formatted cleanly', async () => {
+  const prompt = getSystemPrompt();
+  assert.match(prompt, /Bank: Moniepoint MFB/);
+  assert.match(prompt, /Account Name: Ajayi Kikelomo Oluwatosin/);
+  assert.match(prompt, /Account Number: 5140099034/);
+
+  // Test sanitizer fixes any slip into "Bank: MFB"
+  const rawReply = `Please pay via transfer:\nBank: MFB\nAccount Name: Ajayi Kikelomo Oluwatosin\nAccount Number: 5140099034`;
+  const sanitized = sanitizeCustomerFacingOutput(rawReply);
+  assert.match(sanitized, /Bank: Moniepoint MFB/);
+  assert.doesNotMatch(sanitized, /Bank: MFB\b/);
+});
+
+test('dynamic emoji cadence: deduplicateTrailingEmojis removes repeated trailing emoji but preserves first and mid-sentence use', () => {
+  // Prompt contains new dynamic rule (not the old hardcoded ban)
+  const prompt = getSystemPrompt();
+  assert.match(prompt, /DYNAMIC EMOJI CADENCE/);
+  assert.match(prompt, /LOCATION-AWARE STORE VISITS/);
+  assert.match(prompt, /Only suggest visiting Shop 32A Justrite Mall Akure if the customer is located in Akure or Ondo State/);
+
+  // Repeated trailing emoji: first occurrence kept, duplicate stripped
+  const spammy = 'Great news! 🌸\n\nWould you like to order? 🌸';
+  const clean = sanitizeCustomerFacingOutput(spammy);
+  const flowerCount = (clean.match(/🌸/g) || []).length;
+  assert.equal(flowerCount, 1, 'duplicate trailing 🌸 should be removed, first kept');
+
+  // Mid-sentence emoji: never stripped by deduplicator
+  const midSentence = 'We have the Rose Massager 🌹 for ₦30,000.\nShall I reserve it?';
+  const cleanMid = sanitizeCustomerFacingOutput(midSentence);
+  assert.match(cleanMid, /🌹/, 'mid-sentence emoji must survive sanitization');
+
+  // Lowball running emoji preserved in full
+  const lowball = '🏃‍♀️🏃‍♀️🏃‍♀️🏃‍♀️🏃‍♀️\n₦46,000 is a good price.';
+  const cleanLowball = sanitizeCustomerFacingOutput(lowball);
+  assert.match(cleanLowball, /🏃/, 'lowball running emoji defense must be preserved');
+
+  // Direct deduplicateTrailingEmojis unit check
+  const twoLines = 'Line one 😊\nLine two 😊';
+  const deduped = deduplicateTrailingEmojis(twoLines);
+  const smileCount = (deduped.match(/😊/g) || []).length;
+  assert.equal(smileCount, 1, 'deduplicateTrailingEmojis should strip second identical trailing emoji');
+});
+
+test('turn completion law, fourth wall privacy, and natural human escalation', async () => {
+  const prompt = getSystemPrompt();
+  assert.match(prompt, /THE TURN-COMPLETION LAW/);
+  assert.match(prompt, /THE FOURTH-WALL PRIVACY RULE/);
+  assert.match(prompt, /ENERGY MIRRORING & NIGERIAN DIALOGUE/);
+
+  const tools = getToolDefinitions();
+  const escTool = tools.find(t => t.function.name === 'escalate_to_human');
+  assert.ok(escTool, 'escalate_to_human tool must be defined');
+  assert.match(escTool.function.description, /explicitly requests to speak with a human, manager, or real staff/);
+
+  // Verify escalation flow when customer asks for manager
+  const db = createInMemoryTestDb();
+  const mockFetch = createMockFetch([
+    {
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'esc_mgr_1',
+            type: 'function',
+            function: {
+              name: 'escalate_to_human',
+              arguments: JSON.stringify({
+                reason: 'Customer requested human manager',
+                customer_summary: 'Customer asked to talk to the manager'
+              })
+            }
+          }
+        ]
+      }
+    },
+    {
+      message: {
+        role: 'assistant',
+        content: 'No problem at all! Let me connect you directly with our manager right away.',
+        tool_calls: null
+      }
+    }
+  ]);
+
+  const result = await runAgentTurn({
+    messages: [{ role: 'user', content: 'can i talk to the manager?' }],
+    db,
+    options: { apiKey: 'test', fetchClient: mockFetch }
+  });
+
+  assert.equal(result.escalated, true, 'Turn must be marked escalated');
+  assert.equal(result.steps.length, 1);
+  assert.equal(result.steps[0].tool, 'escalate_to_human');
+  assert.match(result.reply, /connect you directly with our manager/);
 
   db.close();
 });

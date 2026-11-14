@@ -112,7 +112,7 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'escalate_to_human',
-      description: 'Flag the conversation and escalate to human staff for: 1) Unlisted delivery destinations where calculate_shipping returned { ok: false }, or 2) Repeated customer requests for ingestible prescription remedies or swallowed pills in the current turn. NEVER call this tool for: pricing questions, complaints, standard follow-up questions, the customer saying no, or normal shopping inquiries. IG always means Instagram.',
+      description: 'Flag the conversation and escalate to human staff when: 1) The customer explicitly requests to speak with a human, manager, or real staff, 2) Unlisted delivery destinations where calculate_shipping returned an error, or 3) Repeated customer requests for ingestible prescription remedies or swallowed pills in the current turn. IG always means Instagram.',
       parameters: {
         type: 'object',
         properties: {
