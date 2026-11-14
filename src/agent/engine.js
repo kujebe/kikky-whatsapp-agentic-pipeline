@@ -243,6 +243,10 @@ function sanitizeCustomerFacingOutput(rawText = '', options = {}) {
     .replace(/\[\s*\{[\s\S]*?"name"\s*:[\s\S]*?\}\s*\]/g, '')
     // Strip single-object tool call JSON
     .replace(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"[\s\S]*?\}/g, '')
+    // Currency invariant: Convert any accidental Indian Rupee symbol, Rs., INR, or dollar to Nigerian Naira (₦)
+    .replace(/₹/g, '₦')
+    .replace(/\b(?:Rs\.?|INR)\s*([0-9])/gi, '₦$1')
+    .replace(/\$([0-9])/g, '₦$1')
     .trim();
 
   if (!text && hadContent && options.fallbackIfEmpty !== false) {

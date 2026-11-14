@@ -43,13 +43,13 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'calculate_shipping',
-      description: 'Calculate shipping cost and estimated delivery timeframe for a given Nigerian destination state and optional city. ONLY call this tool after the customer has explicitly provided their destination state or city in the chat. NEVER guess, assume, or hallucinate a destination state.',
+      description: 'Calculate shipping cost and estimated delivery timeframe for a given Nigerian destination state and optional city. MANDATORY: Whenever a customer mentions ANY location (city or state), you MUST call this tool. NEVER guess, assume, or hallucinate a destination state or shipping fee.',
       parameters: {
         type: 'object',
         properties: {
           state: {
             type: 'string',
-            description: 'Destination Nigerian state name explicitly stated by the customer.'
+            description: 'Destination Nigerian state name or city explicitly stated by the customer.'
           },
           city: {
             type: 'string',
@@ -112,7 +112,7 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'escalate_to_human',
-      description: 'Flag the conversation and escalate to human staff ONLY when the customer explicitly and REPEATEDLY requests ingestible medical remedies, prescription drugs, or swallowed pills IN THE CURRENT TURN, after already being told that Kikky only sells adult intimate wellness items. NEVER call this tool for: pricing questions, complaints, standard follow-up questions, the customer saying no, the customer changing topic, or any situation where the customer is simply shopping. IG always means Instagram. Do NOT call this tool based on stale context from earlier turns.',
+      description: 'Flag the conversation and escalate to human staff for: 1) Unlisted delivery destinations where calculate_shipping returned { ok: false }, or 2) Repeated customer requests for ingestible prescription remedies or swallowed pills in the current turn. NEVER call this tool for: pricing questions, complaints, standard follow-up questions, the customer saying no, or normal shopping inquiries. IG always means Instagram.',
       parameters: {
         type: 'object',
         properties: {

@@ -144,7 +144,12 @@ const deliveryZones = [
   { state: 'Lagos', city: 'Lagos', fee: 5000, estimated_days: '2-4' },
   { state: 'FCT', city: null, fee: 9000, estimated_days: '3-6' },
   { state: 'FCT', city: 'Abuja', fee: 7000, estimated_days: '3-5' },
-  { state: 'Abuja', city: null, fee: 8500, estimated_days: '3-6' }
+  { state: 'Abuja', city: null, fee: 8500, estimated_days: '3-6' },
+  { state: 'Oyo', city: null, fee: 3500, estimated_days: '2-3 days via commercial transit' },
+  { state: 'Oyo', city: 'Ibadan', fee: 3500, estimated_days: '2-3 days via commercial transit' },
+  { state: 'Ibadan', city: null, fee: 3500, estimated_days: '2-3 days via commercial transit' },
+  { state: 'Osun', city: null, fee: 2500, estimated_days: '1-2 days via transit' },
+  { state: 'Osun', city: 'Osogbo', fee: 2500, estimated_days: '1-2 days via transit' }
 ];
 
 const STORE_WALK_IN_NOTE = `Walk-in open at ${process.env.STORE_ADDRESS || 'Shop 32A Akure Mall (Justrite)'}`;

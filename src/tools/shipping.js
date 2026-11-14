@@ -40,6 +40,15 @@ function createShippingTool(db) {
       }
 
       if (!delivery) {
+        delivery = db.prepare(`
+          SELECT state, city, fee, estimated_days
+          FROM deliveries
+          WHERE city = ? COLLATE NOCASE
+          LIMIT 1
+        `).get(state);
+      }
+
+      if (!delivery) {
         return {
           ok: false,
           error: `Shipping not available for state: ${state}. Escalate to staff.`

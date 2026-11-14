@@ -5,7 +5,7 @@ const { openDatabase } = require('../src/db');
 const { seedTemporaryData } = require('../src/seed');
 const { getSystemPrompt } = require('../src/agent/prompt');
 const { getToolDefinitions } = require('../src/agent/tools');
-const { runAgentTurn, parseToolArguments } = require('../src/agent/engine');
+const { runAgentTurn, parseToolArguments, sanitizeCustomerFacingOutput } = require('../src/agent/engine');
 const {
   dispatchTextTurn,
   dispatchAudioTurn,
@@ -498,4 +498,115 @@ test('parseMediaCommand handles various path and caption formats', () => {
   const p5 = parseMediaCommand('/voice voice.opus check this', '/voice');
   assert.equal(p5.filePath, 'voice.opus');
   assert.equal(p5.caption, 'check this');
+});
+
+test('all generated text formats prices with ₦ and never contains ₹', async () => {
+  const db = createInMemoryTestDb();
+
+  // Test sanitizer directly
+  const rawLeak = 'The price is ₹46,000 and ₹5,000 for lube.';
+  const sanitized = sanitizeCustomerFacingOutput(rawLeak);
+  assert.equal(sanitized.includes('₹'), false);
+  assert.equal(sanitized.includes('₦46,000'), true);
+
+  // Test full agent turn
+  const mockFetch = createMockFetch([
+    {
+      message: {
+        role: 'assistant',
+        content: 'The Rose Massager is ₹30,000. Would you like to order?',
+        tool_calls: null
+      }
+    }
+  ]);
+
+  const result = await runAgentTurn({
+    messages: [{ role: 'user', content: 'how much is the rose?' }],
+    db,
+    options: { apiKey: 'test', fetchClient: mockFetch }
+  });
+
+  assert.equal(result.reply.includes('₹'), false);
+  assert.match(result.reply, /₦30,000/);
+  assert.equal(result.replies.some(r => r.includes('₹')), false);
+
+  db.close();
+});
+
+test('when user asks for shipping to Ibadan, agent emits calculate_shipping tool call before replying', async () => {
+  const db = createInMemoryTestDb();
+
+  const mockFetch = createMockFetch([
+    {
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_ship_ibadan',
+            type: 'function',
+            function: {
+              name: 'calculate_shipping',
+              arguments: JSON.stringify({ state: 'Oyo', city: 'Ibadan' })
+            }
+          }
+        ]
+      }
+    },
+    {
+      message: {
+        role: 'assistant',
+        content: 'Delivery to Ibadan, Oyo State is ₦3,500 via commercial transit (2-3 days).',
+        tool_calls: null
+      }
+    }
+  ]);
+
+  const result = await runAgentTurn({
+    messages: [{ role: 'user', content: 'How much to ship to Ibadan?' }],
+    db,
+    options: { apiKey: 'test', fetchClient: mockFetch }
+  });
+
+  assert.equal(result.steps.length, 1);
+  assert.equal(result.steps[0].tool, 'calculate_shipping');
+  assert.equal(result.steps[0].output.ok, true);
+  assert.equal(result.steps[0].output.delivery.fee, 3500);
+  assert.match(result.reply, /₦3,500/);
+  assert.equal(result.reply.includes('₹'), false);
+
+  db.close();
+});
+
+test('when user tries to negotiate price, agent holds retail_price firm and does not invent free delivery', async () => {
+  const db = createInMemoryTestDb();
+
+  const prompt = getSystemPrompt();
+  assert.match(prompt, /BAN INVENTED DISCOUNTS & "SPLIT ORDERS"/);
+  assert.match(prompt, /NEVER HALLUCINATE SHIPPING/);
+
+  const mockFetch = createMockFetch([
+    {
+      message: {
+        role: 'assistant',
+        content: '🏃‍♀️🏃‍♀️ ₦46,000 is a good price.\n\nOur prices are firm, and we do not offer free shipping.',
+        tool_calls: null
+      }
+    }
+  ]);
+
+  const result = await runAgentTurn({
+    messages: [
+      { role: 'user', content: 'can you make it 30k and free delivery?' }
+    ],
+    db,
+    options: { apiKey: 'test', fetchClient: mockFetch }
+  });
+
+  assert.match(result.reply, /₦46,000/);
+  assert.doesNotMatch(result.reply, /free delivery/i);
+  assert.doesNotMatch(result.reply, /₹/);
+  assert.equal(result.escalated, false);
+
+  db.close();
 });
