@@ -2,6 +2,7 @@ const { transcribeAudio } = require('../media/transcriber');
 const { classifyImage } = require('../media/vision');
 const { runAgentTurn } = require('./engine');
 const { getOrCreateSession, updateSession, extractSessionInferences } = require('./session');
+const { releaseExpiredHolds, verify_transfer_receipt } = require('../tools/orders');
 
 const UNCLEAR_AUDIO_MESSAGE = 'I could not hear that voice note clearly, please type it for me.';
 
@@ -29,6 +30,27 @@ async function dispatchTextTurn({
   }
 
   const session = options.session || (db ? getOrCreateSession(db, options.sessionId, options.sessionData) : null);
+  const sessionId = session?.session_id || options.sessionId;
+
+  if (db) {
+    releaseExpiredHolds(db);
+  }
+
+  let activeReservation = null;
+  if (db && session) {
+    try {
+      activeReservation = db.prepare(`
+        SELECT r.*, p.name as product_name
+        FROM order_reservations r
+        LEFT JOIN products p ON r.product_id = p.id
+        WHERE r.session_id = ? AND r.status = 'AWAITING_PAYMENT'
+        ORDER BY r.created_at DESC
+        LIMIT 1
+      `).get(session.session_id);
+    } catch {
+      activeReservation = null;
+    }
+  }
 
   const updatedMessages = [
     ...history,
@@ -42,7 +64,9 @@ async function dispatchTextTurn({
       toolsInstance,
       options: {
         ...options,
-        session
+        session,
+        sessionId,
+        activeReservation
       }
     });
 
@@ -167,16 +191,47 @@ async function dispatchImageTurn({
       simulatedUserPrompt = `[Customer sent an image of an item with keywords: ${keywords}]. Check catalog and confirm availability.`;
     }
   } else if (classification.type === 'payment_receipt') {
+    const effectiveSessionId = options.sessionId || options.session?.session_id || 'sim-default';
+    let verificationResult = null;
+    if (db) {
+      try {
+        verificationResult = verify_transfer_receipt({
+          extracted_amount: classification.amount,
+          bank_name: classification.bank,
+          sender_name: classification.sender,
+          receipt_date: classification.date,
+          raw_metadata: classification
+        }, { db, sessionId: effectiveSessionId });
+      } catch {
+        verificationResult = null;
+      }
+    }
+
     const parts = [];
     if (classification.amount != null) parts.push(`amount: ${classification.amount}`);
     if (classification.bank) parts.push(`bank: ${classification.bank}`);
     if (classification.date) parts.push(`date: ${classification.date}`);
     if (classification.sender) parts.push(`sender: ${classification.sender}`);
     const receiptSummary = parts.length > 0 ? parts.join(', ') : 'bank transfer';
-    if (cleanCaption) {
-      simulatedUserPrompt = `[Customer sent a bank transfer receipt showing ${receiptSummary}]. Customer message: "${cleanCaption}". Acknowledge receipt, confirm details, and ask for delivery address and phone number.`;
+
+    let verificationEvent = '';
+    if (verificationResult) {
+      verificationEvent = ` [SYSTEM NOTE: Receipt automatically verified. Outcome: ${JSON.stringify(verificationResult)}]`;
+      if (verificationResult.ok && verificationResult.matched) {
+        verificationEvent += ` Payment verified. Prompt customer for delivery street address and recipient phone number.`;
+      } else if (verificationResult.underpaid) {
+        verificationEvent += ` Payment underpaid. Inform customer of remaining balance.`;
+      } else if (verificationResult.error_code === 'hold_expired') {
+        verificationEvent += ` Reservation expired. Checking if stock is still available.`;
+      }
     } else {
-      simulatedUserPrompt = `[Customer sent a bank transfer receipt showing ${receiptSummary}]. Acknowledge receipt and ask for delivery address and phone number.`;
+      verificationEvent = ` Acknowledge receipt, confirm details, and ask for delivery address and phone number.`;
+    }
+
+    if (cleanCaption) {
+      simulatedUserPrompt = `[Customer sent a bank transfer receipt showing ${receiptSummary}]. Customer message: "${cleanCaption}".${verificationEvent}`;
+    } else {
+      simulatedUserPrompt = `[Customer sent a bank transfer receipt showing ${receiptSummary}].${verificationEvent}`;
     }
   } else {
     if (cleanCaption) {

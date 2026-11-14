@@ -346,15 +346,17 @@ async function runAgentTurn({
   const debug = options.debug ?? (process.env.DEBUG === 'true');
   const fetchClient = options.fetchClient || globalThis.fetch;
 
-  const toolExecutors = toolsInstance || (db ? createTools(db) : {});
+  const session = options.session;
+  const effectiveSessionId = session?.session_id || options.sessionId;
+  const toolExecutors = toolsInstance || (db ? createTools(db, { sessionId: effectiveSessionId }) : {});
   const toolDefinitions = getToolDefinitions();
 
-  const session = options.session;
   const historyCount = messages.filter(m => m.role === 'user' || m.role === 'assistant').length;
   const activeSystemPrompt = options.systemPrompt || getSystemPrompt({
     session,
     timeWat: options.timeWat,
-    historyCount
+    historyCount,
+    activeReservation: options.activeReservation
   });
 
   const conversationHistory = [...messages];

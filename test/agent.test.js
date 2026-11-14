@@ -73,15 +73,17 @@ test('prompt and tools export valid operational definitions', () => {
   assert.match(prompt, /Moniepoint/);
 
   const tools = getToolDefinitions();
-  assert.equal(tools.length, 6);
+  assert.equal(tools.length, 8);
   const toolNames = tools.map(t => t.function.name).sort();
   assert.deepEqual(toolNames, [
     'calculate_shipping',
     'check_store_hours',
+    'create_order_reservation',
     'escalate_to_human',
     'get_product_details',
     'record_waitlist_request',
-    'search_catalog'
+    'search_catalog',
+    'verify_transfer_receipt'
   ]);
 });
 

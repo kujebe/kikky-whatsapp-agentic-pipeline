@@ -4,14 +4,17 @@ const { createShippingTool } = require('./shipping');
 const { createEscalationTool } = require('./escalation');
 const { checkStoreHours } = require('./store_hours');
 const { recordWaitlistRequest } = require('./waitlist');
+const { releaseExpiredHolds, create_order_reservation, verify_transfer_receipt } = require('./orders');
 
-function createTools(db, { emit = logEvent } = {}) {
+function createTools(db, { emit = logEvent, sessionId } = {}) {
   const handlers = {
     ...createCatalogTools(db),
     calculate_shipping: createShippingTool(db),
     escalate_to_human: createEscalationTool(db),
     check_store_hours: (input) => checkStoreHours(db, input),
-    record_waitlist_request: (input) => recordWaitlistRequest(db, input)
+    record_waitlist_request: (input) => recordWaitlistRequest(db, input),
+    create_order_reservation: (input) => create_order_reservation(input, { db, sessionId }),
+    verify_transfer_receipt: (input) => verify_transfer_receipt(input, { db, sessionId })
   };
 
   return Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (input) => {
@@ -59,5 +62,8 @@ module.exports = {
   createShippingTool,
   createEscalationTool,
   checkStoreHours,
-  recordWaitlistRequest
+  recordWaitlistRequest,
+  releaseExpiredHolds,
+  create_order_reservation,
+  verify_transfer_receipt
 };

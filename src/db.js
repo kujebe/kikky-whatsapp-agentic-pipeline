@@ -82,12 +82,47 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS order_reservations (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(session_id),
+      status TEXT NOT NULL DEFAULT 'AWAITING_PAYMENT' 
+        CHECK (status IN ('AWAITING_PAYMENT', 'PAYMENT_VERIFIED', 'EXPIRED', 'CANCELLED', 'FULFILLED')),
+      product_id TEXT NOT NULL REFERENCES products(id),
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+      unit_price INTEGER NOT NULL CHECK (unit_price >= 0),
+      delivery_state TEXT NOT NULL,
+      delivery_city TEXT,
+      delivery_fee INTEGER NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),
+      total_amount INTEGER NOT NULL CHECK (total_amount >= 0),
+      hold_expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL REFERENCES order_reservations(id),
+      session_id TEXT NOT NULL REFERENCES sessions(session_id),
+      amount INTEGER NOT NULL CHECK (amount > 0),
+      bank_name TEXT,
+      sender_name TEXT,
+      receipt_date TEXT,
+      status TEXT NOT NULL DEFAULT 'matched' 
+        CHECK (status IN ('matched', 'underpaid', 'manual_review')),
+      raw_metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
     CREATE INDEX IF NOT EXISTS idx_deliveries_state_city ON deliveries(state, city);
     CREATE INDEX IF NOT EXISTS idx_sessions_phone ON sessions(customer_phone);
     CREATE INDEX IF NOT EXISTS idx_waitlist_contact ON waitlist(customer_contact);
     CREATE INDEX IF NOT EXISTS idx_store_hours_day ON store_hours(day_of_week);
+    CREATE INDEX IF NOT EXISTS idx_orders_session_status ON order_reservations(session_id, status);
+    CREATE INDEX IF NOT EXISTS idx_orders_expires_at ON order_reservations(hold_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_session ON payments(session_id);
   `);
 
   const cityColumn = db.prepare('PRAGMA table_info(deliveries)')

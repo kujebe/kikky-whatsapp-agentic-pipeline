@@ -111,6 +111,66 @@ const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'create_order_reservation',
+      description: 'Reserve inventory for 45 minutes, calculate shipping fee, and lock in the total amount for an order. MANDATORY: You must call this tool whenever a customer confirms they want to buy a product and states their delivery location. Returns order summary, exact total amount, and Moniepoint payment details.',
+      parameters: {
+        type: 'object',
+        properties: {
+          product_id: {
+            type: 'string',
+            description: 'The unique product identifier code or name from the catalog.'
+          },
+          state: {
+            type: 'string',
+            description: 'Destination Nigerian state name explicitly stated by the customer.'
+          },
+          city: {
+            type: 'string',
+            description: 'Optional destination town or city within the state explicitly stated by the customer.'
+          },
+          quantity: {
+            type: 'integer',
+            description: 'Quantity of items to purchase. Defaults to 1 if omitted.'
+          }
+        },
+        required: ['product_id', 'state'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'verify_transfer_receipt',
+      description: 'Verify a bank transfer receipt against the customer active order reservation. Checks amount against the required order total. If full or overpaid, marks order as verified so you can request street address and calling phone number. If underpaid, returns the remaining balance due.',
+      parameters: {
+        type: 'object',
+        properties: {
+          extracted_amount: {
+            type: 'integer',
+            description: 'Amount in NGN extracted from the customer payment receipt.'
+          },
+          bank_name: {
+            type: 'string',
+            description: 'Optional sender bank name extracted from receipt.'
+          },
+          sender_name: {
+            type: 'string',
+            description: 'Optional sender account name extracted from receipt.'
+          },
+          receipt_date: {
+            type: 'string',
+            description: 'Optional date or timestamp extracted from receipt.'
+          }
+        },
+        required: ['extracted_amount'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'escalate_to_human',
       description: 'Flag the conversation and escalate to human staff when: 1) The customer explicitly requests to speak with a human, manager, or real staff, 2) Unlisted delivery destinations where calculate_shipping returned an error, or 3) Repeated customer requests for ingestible prescription remedies or swallowed pills in the current turn. IG always means Instagram.',
       parameters: {
