@@ -5,6 +5,8 @@ const { createEscalationTool } = require('./escalation');
 const { checkStoreHours } = require('./store_hours');
 const { recordWaitlistRequest } = require('./waitlist');
 const { releaseExpiredHolds, create_order_reservation, verify_transfer_receipt } = require('./orders');
+const { save_delivery_details } = require('./dispatch');
+const { create_paystack_link } = require('./paystack');
 
 function createTools(db, { emit = logEvent, sessionId } = {}) {
   const handlers = {
@@ -14,7 +16,9 @@ function createTools(db, { emit = logEvent, sessionId } = {}) {
     check_store_hours: (input) => checkStoreHours(db, input),
     record_waitlist_request: (input) => recordWaitlistRequest(db, input),
     create_order_reservation: (input) => create_order_reservation(input, { db, sessionId }),
-    verify_transfer_receipt: (input) => verify_transfer_receipt(input, { db, sessionId })
+    verify_transfer_receipt: (input) => verify_transfer_receipt(input, { db, sessionId }),
+    save_delivery_details: (input) => save_delivery_details(input, { db, sessionId, emit }),
+    create_paystack_link: (input) => create_paystack_link(input, { db, sessionId })
   };
 
   return Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (input) => {
@@ -30,6 +34,33 @@ function createTools(db, { emit = logEvent, sessionId } = {}) {
 
     try {
       const result = handler(input);
+      if (result && typeof result.then === 'function') {
+        return result.then((asyncResult) => {
+          emit('tool.call.completed', {
+            request_id: requestId,
+            component: 'tools',
+            stage: 'dispatch',
+            tool: name,
+            outcome: asyncResult?.ok === false ? 'error' : 'success',
+            result_count: Number.isInteger(asyncResult?.count) ? asyncResult.count : undefined,
+            duration_ms: performance.now() - startedAt,
+            error_code: asyncResult?.ok === false ? 'tool_returned_error' : undefined
+          });
+          return asyncResult;
+        }).catch((error) => {
+          emit('tool.call.failed', {
+            request_id: requestId,
+            component: 'tools',
+            stage: 'dispatch',
+            tool: name,
+            outcome: 'error',
+            error_code: error?.name === 'SqliteError' ? 'database_error' : 'internal_error',
+            duration_ms: performance.now() - startedAt
+          });
+          return { ok: false, error: 'Error: tool execution failed' };
+        });
+      }
+
       emit('tool.call.completed', {
         request_id: requestId,
         component: 'tools',
@@ -53,7 +84,7 @@ function createTools(db, { emit = logEvent, sessionId } = {}) {
       });
       return { ok: false, error: 'Error: tool execution failed' };
     }
-  }]))
+  }]));
 }
 
 module.exports = {
@@ -65,5 +96,7 @@ module.exports = {
   recordWaitlistRequest,
   releaseExpiredHolds,
   create_order_reservation,
-  verify_transfer_receipt
+  verify_transfer_receipt,
+  save_delivery_details,
+  create_paystack_link
 };

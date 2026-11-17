@@ -1,4 +1,4 @@
-const TOOL_DEFINITIONS = [
+const BASE_TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
@@ -192,11 +192,61 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
-function getToolDefinitions() {
-  return TOOL_DEFINITIONS;
+const EXTENDED_TOOL_DEFINITIONS = [
+  {
+    type: 'function',
+    function: {
+      name: 'save_delivery_details',
+      description: 'Save customer recipient name, calling phone number, and delivery street address to generate a rider dispatch slip. MANDATORY: You must call this tool immediately when a customer provides their delivery details AFTER their payment is verified (via bank receipt or Paystack). Do NOT call this tool before payment is verified.',
+      parameters: {
+        type: 'object',
+        properties: {
+          recipient_name: {
+            type: 'string',
+            description: 'Full name of the package recipient.'
+          },
+          recipient_phone: {
+            type: 'string',
+            description: 'Nigerian phone number of recipient (10-14 digits) for rider call on arrival.'
+          },
+          delivery_address: {
+            type: 'string',
+            description: 'Detailed street address, house/flat number, landmark, and area for delivery.'
+          }
+        },
+        required: ['recipient_name', 'recipient_phone', 'delivery_address'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_paystack_link',
+      description: 'Generate an instant secure Paystack online card payment link for an active order reservation. ONLY call this tool when the customer explicitly prefers or asks to pay by debit/credit card or online payment link instead of direct bank transfer. Requires an active order reservation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_email: {
+            type: 'string',
+            description: 'Optional customer email address for the Paystack payment receipt.'
+          }
+        },
+        additionalProperties: false
+      }
+    }
+  }
+];
+
+const ALL_TOOL_DEFINITIONS = [...BASE_TOOL_DEFINITIONS, ...EXTENDED_TOOL_DEFINITIONS];
+
+function getToolDefinitions({ all = false } = {}) {
+  return all ? ALL_TOOL_DEFINITIONS : BASE_TOOL_DEFINITIONS;
 }
 
 module.exports = {
-  TOOL_DEFINITIONS,
+  TOOL_DEFINITIONS: ALL_TOOL_DEFINITIONS,
+  BASE_TOOL_DEFINITIONS,
+  ALL_TOOL_DEFINITIONS,
   getToolDefinitions
 };

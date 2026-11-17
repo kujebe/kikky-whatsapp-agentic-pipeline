@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const readline = require('node:readline/promises');
 const { stdin, stdout } = require('node:process');
 require('dotenv').config();
@@ -9,6 +10,8 @@ const { seedTemporaryData } = require('../src/seed');
 const { dispatchTextTurn, dispatchAudioTurn, dispatchImageTurn } = require('../src/agent/dispatcher');
 const { createDebouncer } = require('../src/debounce');
 const { releaseExpiredHolds } = require('../src/tools/orders');
+const config = require('../src/config');
+const { handlePaystackPayload } = require('../src/webhook');
 
 const CYAN = '\x1b[36m';
 const GREEN = '\x1b[32m';
@@ -75,6 +78,7 @@ async function main() {
   console.log(`  ${YELLOW}/voice <path>${RESET}                   - Send audio voice note to Kikky`);
   console.log(`  ${YELLOW}/image <path>${RESET}                   - Send product image or photo`);
   console.log(`  ${YELLOW}/receipt <path>${RESET}                 - Send payment receipt image for verification`);
+  console.log(`  ${YELLOW}/paystack-sim${RESET}                  - Simulate instant Paystack card payment webhook`);
   console.log(`  ${YELLOW}/burst <msg1> | <msg2> | <msg3>${RESET} - Test 8-second debounce buffer`);
   console.log(`  ${YELLOW}/session${RESET}                        - Print current session & order hold state`);
   console.log(`  ${YELLOW}/history${RESET}                        - Print current session messages`);
@@ -152,6 +156,82 @@ async function main() {
           recent_payments: recentPayments
         }, null, 2));
         console.log(`${GRAY}--------------------------------------------------${RESET}\n`);
+        continue;
+      }
+
+      if (trimmed.startsWith('/paystack-sim')) {
+        const activeOrder = db.prepare(`
+          SELECT * FROM order_reservations
+          WHERE session_id = ? AND status = 'AWAITING_PAYMENT'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).get(sessionId);
+
+        if (!activeOrder) {
+          console.log(`${RED}No active AWAITING_PAYMENT reservation found for current session. Place an order reservation first.${RESET}\n`);
+          continue;
+        }
+
+        const ref = `kikky_${activeOrder.id}_${Date.now()}`;
+        const payload = {
+          event: 'charge.success',
+          data: {
+            id: Date.now(),
+            domain: 'test',
+            status: 'success',
+            reference: ref,
+            amount: Math.round(activeOrder.total_amount * 100),
+            currency: 'NGN',
+            channel: 'card',
+            metadata: {
+              order_id: activeOrder.id,
+              session_id: sessionId
+            },
+            customer: {
+              first_name: 'Simulated',
+              last_name: 'Buyer',
+              email: `buyer_${sessionId}@kikkycare.ng`
+            }
+          }
+        };
+
+        const rawBody = JSON.stringify(payload);
+        const secretKey = config.paystackSecretKey || 'sk_test_sim_secret';
+        const signature = crypto.createHmac('sha512', secretKey).update(rawBody).digest('hex');
+
+        console.log(`\n${CYAN}[Simulating Paystack charge.success webhook for Order ${activeOrder.id}]${RESET}`);
+
+        let handled = false;
+        try {
+          const webhookUrl = `http://localhost:${config.paystackWebhookPort}/webhooks/paystack`;
+          const resp = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-paystack-signature': signature
+            },
+            body: rawBody
+          });
+          const json = await resp.json();
+          console.log(`${GREEN}Webhook HTTP response (${resp.status}): ${JSON.stringify(json)}${RESET}`);
+          handled = true;
+        } catch {
+          const inMemConfig = { ...config, paystackSecretKey: secretKey };
+          const result = handlePaystackPayload({
+            payload,
+            signature,
+            rawBody,
+            db,
+            config: inMemConfig
+          });
+          console.log(`${GREEN}[In-Memory Webhook Processed]: ${JSON.stringify(result)}${RESET}`);
+          handled = true;
+        }
+
+        if (handled) {
+          console.log(`${GREEN}Payment committed! Order ${activeOrder.id} is now PAYMENT_VERIFIED.${RESET}`);
+          console.log(`${YELLOW}You can now send your delivery address, name, and phone to trigger rider dispatch.${RESET}\n`);
+        }
         continue;
       }
 

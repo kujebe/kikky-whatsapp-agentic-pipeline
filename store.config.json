@@ -1,0 +1,18 @@
+{
+  "storeId": "kikky_luxuryfemcare",
+  "storeName": "Kikky Luxury Femcare",
+  "descriptor": "KLF Luxury Care",
+  "currencySymbol": "₦",
+  "physicalLocation": {
+    "name": "Shop 32A Akure Shopping Mall (Justrite)",
+    "address": "Shop 32A Akure Shopping Mall (Justrite), Akure, Ondo State",
+    "city": "Akure",
+    "state": "Ondo State"
+  },
+  "bankAccount": {
+    "bankName": "Moniepoint MFB",
+    "accountNumber": "5140099034",
+    "accountName": "Ajayi Kikelomo Oluwatosin"
+  },
+  "fallbackEmailDomain": "kikkycare.ng"
+}

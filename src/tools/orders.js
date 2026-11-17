@@ -2,10 +2,9 @@ const crypto = require('node:crypto');
 const { z } = require('zod');
 const { calculateShippingFee } = require('./shipping');
 const { getOrCreateSession } = require('../agent/session');
+const { bankDetailsString } = require('../config');
 
-const BANK_DETAILS_STRING = process.env.STORE_PAYMENT_ACCOUNT
-  ? `5140099034 Moniepoint MFB Ajayi Kikelomo Oluwatosin`
-  : '5140099034 Moniepoint MFB Ajayi Kikelomo Oluwatosin';
+const BANK_DETAILS_STRING = bankDetailsString;
 
 const orderReservationSchema = z.object({
   product_id: z.string().trim().min(1, 'Product ID is required'),

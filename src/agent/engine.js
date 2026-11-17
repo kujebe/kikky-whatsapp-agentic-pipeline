@@ -494,7 +494,7 @@ async function runAgentTurn({
   const session = options.session;
   const effectiveSessionId = session?.session_id || options.sessionId;
   const toolExecutors = toolsInstance || (db ? createTools(db, { sessionId: effectiveSessionId }) : {});
-  const toolDefinitions = getToolDefinitions();
+  const toolDefinitions = options.toolDefinitions || getToolDefinitions({ all: true });
 
   const historyCount = messages.filter(m => m.role === 'user' || m.role === 'assistant').length;
   const activeSystemPrompt = options.systemPrompt || getSystemPrompt({

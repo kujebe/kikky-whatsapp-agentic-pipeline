@@ -110,6 +110,19 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
       status TEXT NOT NULL DEFAULT 'matched' 
         CHECK (status IN ('matched', 'underpaid', 'manual_review')),
       raw_metadata TEXT,
+      reference TEXT UNIQUE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS dispatches (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL REFERENCES order_reservations(id),
+      session_id TEXT NOT NULL REFERENCES sessions(session_id),
+      recipient_name TEXT NOT NULL,
+      recipient_phone TEXT NOT NULL,
+      delivery_address TEXT NOT NULL,
+      rider_slip TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_rider' CHECK (status IN ('pending_rider', 'dispatched', 'delivered')),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -123,7 +136,17 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
     CREATE INDEX IF NOT EXISTS idx_orders_expires_at ON order_reservations(hold_expires_at);
     CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
     CREATE INDEX IF NOT EXISTS idx_payments_session ON payments(session_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_reference ON payments(reference);
+    CREATE INDEX IF NOT EXISTS idx_dispatches_order ON dispatches(order_id);
+    CREATE INDEX IF NOT EXISTS idx_dispatches_session ON dispatches(session_id);
   `);
+
+  // Migrate existing payments table if reference column is missing
+  const paymentColumns = db.prepare('PRAGMA table_info(payments)').all();
+  if (!paymentColumns.some(column => column.name === 'reference')) {
+    db.exec('ALTER TABLE payments ADD COLUMN reference TEXT');
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_reference ON payments(reference)');
 
   const cityColumn = db.prepare('PRAGMA table_info(deliveries)')
     .all()
