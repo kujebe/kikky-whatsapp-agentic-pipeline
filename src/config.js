@@ -17,6 +17,8 @@ if (fs.existsSync(CONFIG_PATH)) {
 const storeName = process.env.STORE_NAME || storeConfig.storeName || 'Kikky Luxury Femcare';
 const storeDescriptor = process.env.PAYSTACK_STATEMENT_DESCRIPTOR || storeConfig.descriptor || 'KLF Luxury Care';
 const currencySymbol = process.env.CURRENCY_SYMBOL || storeConfig.currencySymbol || '₦';
+const storeId = storeConfig.storeId || 'kikky_luxuryfemcare';
+const paystackPaymentUrl = process.env.PAYSTACK_PAYMENT_URL || storeConfig.paystackPaymentUrl || `https://paystack.com/pay/${storeId}`;
 
 const physicalLocation = {
   name: storeConfig.physicalLocation?.name || 'Shop 32A Akure Shopping Mall (Justrite)',
@@ -34,6 +36,7 @@ const bankAccount = {
 const fallbackEmailDomain = process.env.FALLBACK_EMAIL_DOMAIN || storeConfig.fallbackEmailDomain || 'kikkycare.ng';
 
 const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
+const paystackPublicKey = process.env.PAYSTACK_PUBLIC_KEY || '';
 const paystackWebhookPort = parseInt(process.env.PAYSTACK_WEBHOOK_PORT || '3001', 10);
 const paystackCallbackUrl = process.env.PAYSTACK_CALLBACK_URL || '';
 
@@ -44,6 +47,7 @@ function formatBankDetails() {
 }
 
 module.exports = {
+  storeId,
   storeName,
   storeDescriptor,
   currencySymbol,
@@ -52,7 +56,9 @@ module.exports = {
   bankDetailsString,
   fallbackEmailDomain,
   paystackSecretKey,
+  paystackPublicKey,
   paystackWebhookPort,
   paystackCallbackUrl,
+  paystackPaymentUrl,
   formatBankDetails
 };

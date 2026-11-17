@@ -448,3 +448,117 @@ test('9. webhook http server: receives live POST request and verifies HMAC corre
     db.close();
   }
 });
+
+test('10. create_paystack_link: falls back gracefully to merchant Paystack store URL when secretKey is unconfigured', async () => {
+  const db = createTestDb();
+  const sessionId = 'test-session-paystack-fallback';
+
+  const reservation = create_order_reservation(
+    { product_id: 'rose-massager-01', state: 'Ondo', city: 'Akure' },
+    { db, sessionId }
+  );
+
+  const testConfig = {
+    paystackSecretKey: '',
+    storeId: 'kikky_luxuryfemcare',
+    paystackPaymentUrl: 'https://paystack.com/pay/kikky_luxuryfemcare'
+  };
+
+  const result = await create_paystack_link({}, { db, sessionId, config: testConfig });
+  assert.equal(result.ok, true);
+  assert.equal(result.payment_url, 'https://paystack.com/pay/kikky_luxuryfemcare');
+  assert.equal(result.amount_ngn, reservation.total_amount);
+  assert.ok(result.reference.startsWith('kikky_'));
+
+  db.close();
+});
+
+test('11. create_paystack_link: auto-books order reservation when none exists if product and location are provided or in session', async () => {
+  const db = createTestDb();
+  const sessionId = 'test-session-auto-book';
+
+  // Seed session with delivery state but NO active order hold
+  db.prepare(`
+    INSERT INTO sessions (session_id, delivery_state, delivery_city, order_stage)
+    VALUES (?, 'Lagos', 'Ikeja', 'browsing')
+  `).run(sessionId);
+
+  let capturedInitPayload = null;
+  const mockFetch = async (url, options) => {
+    capturedInitPayload = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({
+        status: true,
+        data: {
+          authorization_url: 'https://checkout.paystack.com/test-auto-book-code',
+          reference: capturedInitPayload.reference
+        }
+      })
+    };
+  };
+
+  const testConfig = {
+    paystackSecretKey: 'sk_test_fake123',
+    fallbackEmailDomain: 'kikkycare.ng'
+  };
+
+  // Customer called create_paystack_link with product_id (or from history) when no reservation was created yet
+  const result = await create_paystack_link(
+    { product_id: 'wellness-gel-03' },
+    { db, sessionId, config: testConfig, fetchClient: mockFetch }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.payment_url, 'https://checkout.paystack.com/test-auto-book-code');
+  assert.ok(result.reference.startsWith('kikky_'));
+  assert.ok(result.order_id.startsWith('ord_'));
+
+  // Verify the reservation was actually created in SQLite
+  const orderRow = db.prepare('SELECT * FROM order_reservations WHERE id = ?').get(result.order_id);
+  assert.ok(orderRow);
+  assert.equal(orderRow.session_id, sessionId);
+  assert.equal(orderRow.product_id, 'wellness-gel-03');
+  assert.equal(orderRow.status, 'AWAITING_PAYMENT');
+  assert.equal(orderRow.delivery_state, 'Lagos');
+
+  db.close();
+});
+
+test('12. create_paystack_link: returns clean error when neither product nor location can be resolved', async () => {
+  const db = createTestDb();
+  const sessionId = 'test-session-no-context';
+
+  const result = await create_paystack_link({}, { db, sessionId });
+  assert.equal(result.ok, false);
+  assert.equal(result.error_code, 'no_active_reservation');
+  assert.match(result.error, /Confirm product and delivery location first/);
+
+  db.close();
+});
+
+test('13. create_paystack_link: generates fresh distinct reference on consecutive calls', async () => {
+  const db = createTestDb();
+  const sessionId = 'test-session-fresh-refs';
+
+  const reservation = create_order_reservation(
+    { product_id: 'rose-massager-01', state: 'Ondo', city: 'Akure' },
+    { db, sessionId }
+  );
+
+  const testConfig = {
+    paystackSecretKey: '',
+    storeId: 'kikky_luxuryfemcare',
+    paystackPaymentUrl: 'https://paystack.com/pay/kikky_luxuryfemcare'
+  };
+
+  const res1 = await create_paystack_link({}, { db, sessionId, config: testConfig });
+  await new Promise(r => setTimeout(r, 2));
+  const res2 = await create_paystack_link({}, { db, sessionId, config: testConfig });
+
+  assert.equal(res1.ok, true);
+  assert.equal(res2.ok, true);
+  assert.notEqual(res1.reference, res2.reference);
+
+  db.close();
+});

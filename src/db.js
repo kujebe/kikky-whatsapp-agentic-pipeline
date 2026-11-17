@@ -136,7 +136,6 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
     CREATE INDEX IF NOT EXISTS idx_orders_expires_at ON order_reservations(hold_expires_at);
     CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
     CREATE INDEX IF NOT EXISTS idx_payments_session ON payments(session_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_reference ON payments(reference);
     CREATE INDEX IF NOT EXISTS idx_dispatches_order ON dispatches(order_id);
     CREATE INDEX IF NOT EXISTS idx_dispatches_session ON dispatches(session_id);
   `);

@@ -134,6 +134,14 @@ function create_order_reservation(input, { db, sessionId } = {}) {
       LIMIT 1
     `).get(product_id, product_id);
   }
+  if (!product) {
+    const slugName = product_id.replace(/[-_]/g, ' ').trim();
+    product = db.prepare(`
+      SELECT * FROM products
+      WHERE name LIKE ? COLLATE NOCASE OR search_tags LIKE ? COLLATE NOCASE
+      LIMIT 1
+    `).get(`%${slugName}%`, `%${slugName}%`);
+  }
 
   if (!product) {
     return {

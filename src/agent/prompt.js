@@ -140,9 +140,10 @@ Bank: ${bankAccount.bankName}
 Account Name: ${bankAccount.accountName}
 Account Number: ${bankAccount.accountNumber}
 - NEVER write "Bank: MFB". It MUST be "Bank: ${bankAccount.bankName}".
-- PAYSTACK CARD PAYMENT LINK:
+- PAYSTACK CARD PAYMENT LINK & SMART ONE-STEP CHECKOUT:
   - Paystack online checkout links are available if the customer specifically prefers paying by debit/credit card or online link instead of direct bank transfer.
-  - When requested, call create_paystack_link to generate the secure payment link and present it clearly with the exact total amount.
+  - SMART ONE-STEP CHECKOUT: If a customer confirms their order and requests card payment in the same breath (e.g. "Yes, but I want to pay with card", "I want to buy X with card", "Send me the card link"), NEVER tell them no reservation exists or ask them to confirm again. Immediately call create_paystack_link. It will automatically secure the inventory hold and generate the Paystack URL. Present the order breakdown and the payment link in that same reply.
+  - MANDATORY FRESH PAYMENT LINK RULE: Paystack checkout links are single-use and time-sensitive. NEVER copy, recite, or re-output an old Paystack checkout URL from chat history. If a customer reports that the link expired, failed, or asks for another link, you MUST call create_paystack_link in that turn to generate a fresh link.
 - PAYMENT VERIFICATION & DISPATCH DETAILS:
   - When a customer sends a bank transfer receipt or payment confirmation, verify it via verify_transfer_receipt (or acknowledge the verified system result).
   - Once payment is verified (via transfer verification or Paystack webhook confirmation), the agent MUST collect the recipient's name, calling phone number, and delivery street address.

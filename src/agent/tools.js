@@ -223,13 +223,25 @@ const EXTENDED_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'create_paystack_link',
-      description: 'Generate an instant secure Paystack online card payment link for an active order reservation. ONLY call this tool when the customer explicitly prefers or asks to pay by debit/credit card or online payment link instead of direct bank transfer. Requires an active order reservation.',
+      description: 'Generate an instant secure Paystack online card payment link. Call this tool when the customer prefers or asks to pay by debit/credit card, Paystack, or payment link, or if their previous link expired. Automatically creates and confirms the order reservation if one does not already exist.',
       parameters: {
         type: 'object',
         properties: {
           customer_email: {
             type: 'string',
             description: 'Optional customer email address for the Paystack payment receipt.'
+          },
+          product_id: {
+            type: 'string',
+            description: 'Optional product ID to reserve if no active reservation exists yet.'
+          },
+          state: {
+            type: 'string',
+            description: 'Optional destination state name if no active reservation exists yet.'
+          },
+          city: {
+            type: 'string',
+            description: 'Optional destination town or city.'
           }
         },
         additionalProperties: false

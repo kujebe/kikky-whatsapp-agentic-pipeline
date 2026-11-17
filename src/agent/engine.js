@@ -566,22 +566,40 @@ async function runAgentTurn({
       const hasOrderIntent = claimsReservation || hasBuyIntent || (isAffirmative && /order|buy|reserve|deliver|total|price/i.test(allText));
 
       const { location: orderLocation, productId: orderProductId } = findProductAndLocation(messages, session, db);
+      const wantsCard = /(?:card|paystack|payment link|online payment)\b/i.test(lastUserMsg);
 
       if (hasOrderIntent && orderLocation && orderProductId && !options.activeReservation) {
-        logDiagnostic(debug, 'INTERCEPT', 'Intercepted unfulfilled order confirmation, promoting to create_order_reservation');
-        toolCalls = [{
-          id: `call_lazy_res_${Date.now()}`,
-          type: 'function',
-          function: {
-            name: 'create_order_reservation',
-            arguments: JSON.stringify({
-              product_id: orderProductId,
-              state: orderLocation.state,
-              city: orderLocation.city || undefined,
-              quantity: 1
-            })
-          }
-        }];
+        if (wantsCard) {
+          logDiagnostic(debug, 'INTERCEPT', 'Intercepted card order confirmation, promoting to create_paystack_link with auto-reservation');
+          toolCalls = [{
+            id: `call_lazy_pay_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: 'create_paystack_link',
+              arguments: JSON.stringify({
+                product_id: orderProductId,
+                state: orderLocation.state,
+                city: orderLocation.city || undefined,
+                quantity: 1
+              })
+            }
+          }];
+        } else {
+          logDiagnostic(debug, 'INTERCEPT', 'Intercepted unfulfilled order confirmation, promoting to create_order_reservation');
+          toolCalls = [{
+            id: `call_lazy_res_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: 'create_order_reservation',
+              arguments: JSON.stringify({
+                product_id: orderProductId,
+                state: orderLocation.state,
+                city: orderLocation.city || undefined,
+                quantity: 1
+              })
+            }
+          }];
+        }
         assistantMessage.tool_calls = toolCalls;
         assistantMessage.content = null;
       } else if (isManagerRequest || isPaymentDispute) {
@@ -605,6 +623,7 @@ async function runAgentTurn({
       } else {
         const isLazyCatalog = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:catalog|stock|inventory|options|price|for you)/i.test(assistantMessage.content);
         const isLazyShipping = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:shipping|delivery|dispatch|cost|rate|fee)/i.test(assistantMessage.content);
+        const isCardPaymentInquiry = /(?:pay(?:ing)?|checkout)\s+(?:with|via|by|using)\s+card|paystack|card\s+payment|can(?:'t|\s+not)?\s+i\s+pay\s+(?:with|by)\s+(?:a\s+)?card|do\s+you\s+(?:take|accept)\s+card|send\s+(?:me\s+)?(?:a\s+)?(?:card|paystack|payment)\s+link|(?:link|paystack).*(?:expired|invalid|not working|failed|broken|try again)|(?:new|another|fresh|resend).*(?:link|payment link)/i.test(lastUserMsg);
 
         if (isLazyCatalog) {
           logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy catalog turn, promoting to immediate search_catalog');
@@ -632,6 +651,22 @@ async function runAgentTurn({
           }];
           assistantMessage.tool_calls = toolCalls;
           assistantMessage.content = null;
+        } else if (isCardPaymentInquiry) {
+          logDiagnostic(debug, 'INTERCEPT', 'Intercepted card payment inquiry, promoting to immediate create_paystack_link');
+          toolCalls = [{
+            id: `call_lazy_pay_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: 'create_paystack_link',
+              arguments: JSON.stringify({
+                product_id: orderProductId || undefined,
+                state: orderLocation?.state || undefined,
+                city: orderLocation?.city || undefined
+              })
+            }
+          }];
+          assistantMessage.tool_calls = toolCalls;
+          assistantMessage.content = null;
         }
       }
     }
@@ -643,23 +678,61 @@ async function runAgentTurn({
     conversationHistory.push(assistantMessage);
 
     if (!toolCalls || toolCalls.length === 0) {
-      logDiagnostic(debug, 'REASONING', 'Model provided final text reply');
-      let cleanReply = sanitizeCustomerFacingOutput(assistantMessage.content || '');
-      if (!cleanReply) {
-        cleanReply = TOOL_PENDING_REPLY;
+      const hasStalePaystackLink = /checkout\.paystack\.com/i.test(assistantMessage.content || '') && !executedSteps.some(s => s.tool === 'create_paystack_link');
+      if (hasStalePaystackLink && currentStep < maxSteps) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted stale Paystack URL hallucination, promoting to fresh create_paystack_link');
+        const { location: foundLoc, productId: foundProd } = findProductAndLocation(conversationHistory, session, db);
+        toolCalls = [{
+          id: `call_fresh_pay_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'create_paystack_link',
+            arguments: JSON.stringify({
+              product_id: foundProd || undefined,
+              state: foundLoc?.state || undefined,
+              city: foundLoc?.city || undefined
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else {
+        logDiagnostic(debug, 'REASONING', 'Model provided final text reply');
+        let cleanReply = sanitizeCustomerFacingOutput(assistantMessage.content || '');
+        if (!cleanReply) {
+          cleanReply = TOOL_PENDING_REPLY;
+        }
+        return {
+          reply: cleanReply,
+          replies: formatWhatsAppReplies(cleanReply),
+          messages: conversationHistory,
+          steps: executedSteps,
+          escalated
+        };
       }
-      return {
-        reply: cleanReply,
-        replies: formatWhatsAppReplies(cleanReply),
-        messages: conversationHistory,
-        steps: executedSteps,
-        escalated
-      };
     }
 
     for (const toolCall of toolCalls) {
       const toolName = toolCall.function?.name;
       const parsedArgs = parseToolArguments(toolCall.function?.arguments);
+
+      if (toolName === 'create_paystack_link' || toolName === 'create_order_reservation') {
+        const { location: foundLoc, productId: foundProd } = findProductAndLocation(conversationHistory, session, db);
+        if (parsedArgs.product_id) {
+          const resolvedProd = extractProductFromText(parsedArgs.product_id, db);
+          if (resolvedProd) {
+            parsedArgs.product_id = resolvedProd;
+          }
+        } else if (foundProd) {
+          parsedArgs.product_id = foundProd;
+        }
+        if (!parsedArgs.state && foundLoc?.state) {
+          parsedArgs.state = foundLoc.state;
+        }
+        if (!parsedArgs.city && foundLoc?.city) {
+          parsedArgs.city = foundLoc.city;
+        }
+      }
 
       logDiagnostic(debug, `TOOL CALL ${toolName}`, parsedArgs);
 
