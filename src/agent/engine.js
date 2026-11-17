@@ -330,6 +330,151 @@ function logDiagnostic(debug, label, payload) {
   }
 }
 
+const FALLBACK_LOCATIONS = [
+  { match: 'akure', state: 'Ondo', city: 'Akure' },
+  { match: 'ibadan', state: 'Oyo', city: 'Ibadan' },
+  { match: 'osogbo', state: 'Osun', city: 'Osogbo' },
+  { match: 'lagos', state: 'Lagos', city: 'Lagos' },
+  { match: 'abuja', state: 'FCT', city: 'Abuja' },
+  { match: 'sagamu', state: 'Ogun', city: 'Sagamu' },
+  { match: 'ondo', state: 'Ondo', city: null },
+  { match: 'oyo', state: 'Oyo', city: null },
+  { match: 'osun', state: 'Osun', city: null },
+  { match: 'ogun', state: 'Ogun', city: null },
+  { match: 'kano', state: 'Kano', city: null },
+  { match: 'benin', state: 'Edo', city: 'Benin' },
+  { match: 'enugu', state: 'Enugu', city: null },
+  { match: 'port harcourt', state: 'Rivers', city: 'Port Harcourt' },
+  { match: 'calabar', state: 'Cross River', city: null }
+];
+
+const FALLBACK_PRODUCTS = [
+  { pattern: /\brose\b/i, id: 'rose-massager-01' },
+  { pattern: /\bbullet\b|\bpocket\b/i, id: 'pocket-massager-02' },
+  { pattern: /\b(?:gel|lube|lubricant)\b/i, id: 'wellness-gel-03' },
+  { pattern: /\b(?:cards?|date night)\b/i, id: 'couples-cards-04' },
+  { pattern: /\bdildo\b|\bsilicone\b/i, id: 'silicone-accessory-05' },
+  { pattern: /\bwand\b/i, id: 'wand-massager-07' },
+  { pattern: /\bdual\b|\brabbit\b/i, id: 'dual-massager-08' },
+  { pattern: /\b(?:bdsm|restraint)\b/i, id: 'bdsm-mini-kit-09' },
+  { pattern: /\b(?:oil|firming)\b/i, id: 'body-firming-oil-11' }
+];
+
+function getDynamicLocations(db = null) {
+  if (db && typeof db.prepare === 'function') {
+    try {
+      const rows = db.prepare('SELECT state, city FROM deliveries').all();
+      if (rows && rows.length > 0) {
+        const locations = [];
+        for (const row of rows) {
+          if (row.city) {
+            locations.push({ match: row.city.toLowerCase(), state: row.state, city: row.city });
+          }
+          locations.push({ match: row.state.toLowerCase(), state: row.state, city: row.city || null });
+        }
+        return locations;
+      }
+    } catch {
+      // Fall back safely if database schema is not populated
+    }
+  }
+  return FALLBACK_LOCATIONS;
+}
+
+const GENERIC_CATALOG_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'toy', 'toys', 'adult', 'vibrator', 'vibrater',
+  'vibrators', 'vibraters', 'massager', 'massagers', 'personal', 'care', 'flower',
+  'item', 'device', 'luxury', 'intimate', 'rechargeable', 'premium'
+]);
+
+function getDynamicProducts(db = null) {
+  if (db && typeof db.prepare === 'function') {
+    try {
+      const rows = db.prepare('SELECT id, name, search_tags FROM products').all();
+      if (rows && rows.length > 0) {
+        return rows.map(row => {
+          const words = [];
+          if (row.name) {
+            const nameTokens = row.name
+              .replace(/[^a-zA-Z0-9\s]/g, ' ')
+              .split(/\s+/)
+              .map(w => w.toLowerCase())
+              .filter(w => w.length > 2 && !GENERIC_CATALOG_WORDS.has(w));
+            words.push(...nameTokens);
+          }
+          if (row.search_tags) {
+            const tagTokens = row.search_tags
+              .replace(/[^a-zA-Z0-9\s]/g, ' ')
+              .split(/\s+/)
+              .map(w => w.toLowerCase())
+              .filter(w => w.length > 2 && !GENERIC_CATALOG_WORDS.has(w));
+            words.push(...tagTokens);
+          }
+          const uniqueWords = [...new Set(words)];
+          const fb = FALLBACK_PRODUCTS.find(f => f.id === row.id);
+          const escaped = uniqueWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+          const regexSource = escaped.length > 0
+            ? (fb ? `(?:${fb.pattern.source})|\\b(?:${escaped.join('|')})\\b` : `\\b(?:${escaped.join('|')})\\b`)
+            : (fb ? fb.pattern.source : `\\b${row.id}\\b`);
+          return { pattern: new RegExp(regexSource, 'i'), id: row.id };
+        });
+      }
+    } catch {
+      // Fall back safely if database schema is not populated
+    }
+  }
+  return FALLBACK_PRODUCTS;
+}
+
+function extractLocationFromText(text, db = null) {
+  if (!text || typeof text !== 'string') return null;
+  const lower = text.toLowerCase();
+  const locations = getDynamicLocations(db);
+  for (const loc of locations) {
+    if (lower.includes(loc.match)) {
+      return { state: loc.state, city: loc.city };
+    }
+  }
+  return null;
+}
+
+function extractProductFromText(text, db = null) {
+  if (!text || typeof text !== 'string') return null;
+  const products = getDynamicProducts(db);
+  for (const p of products) {
+    if (p.pattern.test(text)) {
+      return p.id;
+    }
+  }
+  return null;
+}
+
+function findProductAndLocation(messages = [], session = null, db = null) {
+  let location = null;
+  let productId = null;
+
+  if (session?.delivery_state) {
+    location = {
+      state: session.delivery_state,
+      city: session.delivery_city || null
+    };
+  }
+
+  const reversed = [...messages].reverse();
+  for (const m of reversed) {
+    const text = m.content || '';
+    if (!location) {
+      location = extractLocationFromText(text, db);
+    }
+    if (!productId) {
+      productId = extractProductFromText(text, db);
+    }
+    if (location && productId) break;
+  }
+
+  return { location, productId };
+}
+
 async function runAgentTurn({
   messages,
   db,
@@ -403,28 +548,66 @@ async function runAgentTurn({
 
     // Intercept lazy promissory replies (such as "I'll check the catalog for you") and trigger immediate execution
     if ((!toolCalls || toolCalls.length === 0) && assistantMessage.content && currentStep === 1) {
-      const isLazyCatalog = /(?:I'll|let me|will)\s+check\s+(?:the\s+)?(?:catalog|stock|inventory|options|for you)/i.test(assistantMessage.content);
-      const isLazyShipping = /(?:I'll|let me|will)\s+check\s+(?:the\s+)?(?:shipping|delivery|dispatch|cost|rate)/i.test(assistantMessage.content);
       const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+      const assistantText = assistantMessage.content;
       const isManagerRequest = /(?:talk to|speak (?:to|with)|call)\s+(?:the\s+)?(?:manager|human|real person|staff)|are you (?:a\s+)?robot/i.test(lastUserMsg);
+      const isPaymentDispute = /(?:that's|that is|its|it's|is)\s+not\s+true|i\s+(?:have\s+)?paid\b|already\s+paid|check\s+(?:your\s+)?(?:account|alert|statement|app)|money\s+(?:has\s+)?left|debited\b/i.test(lastUserMsg);
 
-      if (isLazyCatalog || isLazyShipping || isManagerRequest) {
-        logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy turn or customer manager request, promoting to immediate tool execution');
-        if (isManagerRequest) {
-          toolCalls = [{
-            id: `call_lazy_esc_${Date.now()}`,
-            type: 'function',
-            function: {
-              name: 'escalate_to_human',
-              arguments: JSON.stringify({
-                reason: 'Customer requested human manager',
-                customer_summary: lastUserMsg
-              })
-            }
-          }];
-          assistantMessage.tool_calls = toolCalls;
-          assistantMessage.content = null;
-        } else if (isLazyCatalog) {
+      const paymentAccountRaw = process.env.STORE_PAYMENT_ACCOUNT || '5140099034 Ajayi Kikelomo Oluwatosin Moniepoint MFB';
+      const paymentTokens = paymentAccountRaw
+        .split(/\s+/)
+        .filter(t => t.length >= 4 && !/^(?:MFB|Ajayi|Kikelomo|Oluwatosin)$/i.test(t))
+        .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      const paymentPattern = paymentTokens.length > 0 ? paymentTokens.join('|') : '5140099034|Moniepoint';
+      const claimsReservation = new RegExp(`(?:I've|I have|have)\\s+reserved|reserved\\s+(?:the|your)|please transfer|transfer\\s+₦?[\\d,]+|${paymentPattern}`, 'i').test(assistantText);
+      const hasBuyIntent = /(?:buy|order|purchase|reserve|get me|deliver to|send to)\b/i.test(lastUserMsg);
+      const isAffirmative = /^(?:yes|proceed|oya|ok|confirm|sure|make I pay)\b/i.test(lastUserMsg.trim());
+      const allText = messages.map(m => m.content || '').join(' ') + ' ' + assistantText;
+      const hasOrderIntent = claimsReservation || hasBuyIntent || (isAffirmative && /order|buy|reserve|deliver|total|price/i.test(allText));
+
+      const { location: orderLocation, productId: orderProductId } = findProductAndLocation(messages, session, db);
+
+      if (hasOrderIntent && orderLocation && orderProductId && !options.activeReservation) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted unfulfilled order confirmation, promoting to create_order_reservation');
+        toolCalls = [{
+          id: `call_lazy_res_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'create_order_reservation',
+            arguments: JSON.stringify({
+              product_id: orderProductId,
+              state: orderLocation.state,
+              city: orderLocation.city || undefined,
+              quantity: 1
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else if (isManagerRequest || isPaymentDispute) {
+        const reason = isPaymentDispute
+          ? 'Customer disputed payment receipt verification'
+          : 'Customer requested human manager';
+        logDiagnostic(debug, 'INTERCEPT', `Intercepted ${isPaymentDispute ? 'payment dispute' : 'manager request'}, promoting to immediate escalate_to_human`);
+        toolCalls = [{
+          id: `call_lazy_esc_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'escalate_to_human',
+            arguments: JSON.stringify({
+              reason,
+              customer_summary: lastUserMsg
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else {
+        const isLazyCatalog = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:catalog|stock|inventory|options|price|for you)/i.test(assistantMessage.content);
+        const isLazyShipping = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:shipping|delivery|dispatch|cost|rate|fee)/i.test(assistantMessage.content);
+
+        if (isLazyCatalog) {
+          logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy catalog turn, promoting to immediate search_catalog');
           const cleanQuery = lastUserMsg.replace(/[?!.]/g, '').replace(/^(?:some|any|what|can you suggest)\s+/i, '').trim() || 'massager';
           toolCalls = [{
             id: `call_lazy_${Date.now()}`,
@@ -437,16 +620,14 @@ async function runAgentTurn({
           assistantMessage.tool_calls = toolCalls;
           assistantMessage.content = null;
         } else if (isLazyShipping) {
-          const knownLocations = ['sagamu', 'ibadan', 'akure', 'lagos', 'abuja', 'osogbo', 'ondo', 'oyo', 'osun', 'ogun', 'kano', 'benin', 'enugu', 'port harcourt', 'calabar'];
-          const lower = lastUserMsg.toLowerCase();
-          const foundLoc = knownLocations.find(l => lower.includes(l)) || 'Ondo';
-          const capitalized = foundLoc.charAt(0).toUpperCase() + foundLoc.slice(1);
+          logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy shipping turn, promoting to immediate calculate_shipping');
+          const foundLoc = orderLocation || extractLocationFromText(lastUserMsg, db) || { state: 'Ondo', city: 'Akure' };
           toolCalls = [{
             id: `call_lazy_ship_${Date.now()}`,
             type: 'function',
             function: {
               name: 'calculate_shipping',
-              arguments: JSON.stringify({ state: capitalized, city: capitalized })
+              arguments: JSON.stringify({ state: foundLoc.state, city: foundLoc.city || undefined })
             }
           }];
           assistantMessage.tool_calls = toolCalls;
@@ -595,6 +776,9 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   deduplicateTrailingEmojis,
   extractFallbackToolCalls,
+  extractLocationFromText,
+  extractProductFromText,
+  findProductAndLocation,
   formatWhatsAppReplies,
   parseToolArguments,
   requestChatCompletion,

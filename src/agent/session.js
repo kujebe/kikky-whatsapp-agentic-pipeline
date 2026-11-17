@@ -114,14 +114,14 @@ function extractSessionInferences(currentSession, userText = '', agentReply = ''
 
   // 2. Gender inference & dynamic override (relational partner and kinship cues)
   const maleSpeakerPatterns = [
-    /\bmy\s+(?:girl|girlfriend|wife|woman|babe)\b/i,
+    /\bmy\s+(?:girl|girlfriend|wife|wifey|woman|babe|lady)\b/i,
     /\bher\s+(?:rose|toy|dildo|gift)\b/i,
-    /\b(?:as\s+a\s+guy|i\s+am\s+a\s+man|call\s+me\s+sir)\b/i
+    /\b(?:as\s+a\s+guy|i\s+am\s+a\s+man|call\s+me\s+sir|oga)\b/i
   ];
 
   const femaleSpeakerPatterns = [
-    /\bmy\s+(?:guy|boyfriend|husband|man)\b/i,
-    /\b(?:fellow\s+woman|as\s+a\s+lady|call\s+me\s+ma)\b/i
+    /\bmy\s+(?:guy|boyfriend|husband|hubby|man)\b/i,
+    /\b(?:fellow\s+woman|as\s+a\s+lady|call\s+me\s+ma|madam)\b/i
   ];
 
   if (maleSpeakerPatterns.some(p => p.test(lowerText))) {
@@ -151,9 +151,12 @@ function extractSessionInferences(currentSession, userText = '', agentReply = ''
   }
 
   // 5. Order stage transitions
-  if (userText.includes('payment_receipt') || lowerReply.includes('receipt received') || lowerReply.includes('payment received')) {
+  const hasReservationTool = steps.some(s => s.tool === 'create_order_reservation' && s.output?.ok);
+  const hasPaymentVerifyTool = steps.some(s => s.tool === 'verify_transfer_receipt' && s.output?.ok && s.output?.matched);
+
+  if (hasPaymentVerifyTool || userText.includes('payment_receipt') || lowerReply.includes('receipt received') || lowerReply.includes('payment received')) {
     updates.order_stage = 'paid';
-  } else if (lowerReply.includes(PAYMENT_ACCOUNT_SIGNAL) || lowerReply.includes('moniepoint')) {
+  } else if (hasReservationTool || lowerReply.includes(PAYMENT_ACCOUNT_SIGNAL) || lowerReply.includes('moniepoint')) {
     if (currentSession.order_stage !== 'paid') {
       updates.order_stage = 'awaiting_payment';
     }

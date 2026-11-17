@@ -363,4 +363,264 @@ describe('Stage 4: Order Reservations, Inventory Holds & Receipt Verification', 
     const order = db.prepare('SELECT status FROM order_reservations WHERE id = ?').get(reservation.order_id);
     assert.equal(order.status, 'PAYMENT_VERIFIED');
   });
+
+  test('12. Immediate Intercept: Order confirmation with location forces create_order_reservation when model replies with plain text', async () => {
+    let callStep = 0;
+    const mockFetch = async (url, opts) => {
+      callStep += 1;
+      const parsedBody = JSON.parse(opts.body);
+
+      if (callStep === 1) {
+        // Model initially gives a lazy text response without calling tools
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                role: 'assistant',
+                content: 'Sure thing! The Rose Massager is ₦46,000. We will deliver it to you in Akure. Would you like to proceed?'
+              }
+            }]
+          })
+        };
+      }
+
+      // Step 2: The model now has the tool execution result from the intercept
+      const lastMsg = parsedBody.messages[parsedBody.messages.length - 1];
+      assert.equal(lastMsg.role, 'tool');
+      const toolOutput = JSON.parse(lastMsg.content);
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.total_amount, 31500);
+
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: `Great! The Rose Massager is reserved for you. Total is ₦31,500 including delivery to Akure.\n\nBank: Moniepoint MFB\nAccount Name: Ajayi Kikelomo Oluwatosin\nAccount Number: 5140099034`
+            }
+          }]
+        })
+      };
+    };
+
+    const { dispatchTextTurn } = require('../src/agent/dispatcher');
+    const result = await dispatchTextTurn({
+      text: 'I want to buy the Rose Massager to Akure',
+      db,
+      options: {
+        sessionId: 'lazy-intercept-session',
+        apiKey: 'test-key',
+        fetchClient: mockFetch
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.match(result.reply, /31,500/);
+
+    // Verify database record was actually created in SQLite
+    const activeHold = db.prepare(`
+      SELECT * FROM order_reservations WHERE session_id = ? AND status = 'AWAITING_PAYMENT'
+    `).get('lazy-intercept-session');
+    assert.ok(activeHold);
+    assert.equal(activeHold.product_id, 'rose-massager-01');
+    assert.equal(activeHold.total_amount, 31500);
+    assert.equal(activeHold.delivery_state, 'Ondo');
+    assert.equal(activeHold.delivery_city, 'Akure');
+
+    // Verify stock decremented
+    const product = db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get('rose-massager-01');
+    assert.equal(product.stock_quantity, 4);
+  });
+
+  test('13. Immediate Intercept on Affirmative "yes" after quote forces reservation in SQLite', async () => {
+    let callStep = 0;
+    const mockFetch = async (url, opts) => {
+      callStep += 1;
+      const parsedBody = JSON.parse(opts.body);
+
+      if (callStep === 1) {
+        // Model falsely claims it reserved the item without tool call
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                role: 'assistant',
+                content: `Great! I've reserved the Rose Massager for you. Total is ₦31,500.\n\nPlease transfer to:\nBank: Moniepoint MFB\nAccount Name: Ajayi Kikelomo Oluwatosin\nAccount Number: 5140099034`
+              }
+            }]
+          })
+        };
+      }
+
+      // Step 2: Post-intercept tool execution
+      const lastMsg = parsedBody.messages[parsedBody.messages.length - 1];
+      assert.equal(lastMsg.role, 'tool');
+      const toolOutput = JSON.parse(lastMsg.content);
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.total_amount, 31500);
+
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: `Great! The Rose Massager is reserved. Total is ₦31,500.\n\nBank: Moniepoint MFB\nAccount Name: Ajayi Kikelomo Oluwatosin\nAccount Number: 5140099034`
+            }
+          }]
+        })
+      };
+    };
+
+    const { dispatchTextTurn } = require('../src/agent/dispatcher');
+    const result = await dispatchTextTurn({
+      text: 'yes',
+      history: [
+        { role: 'user', content: 'How much is the Rose Massager to Akure?' },
+        { role: 'assistant', content: 'The Rose Massager is ₦30,000 and delivery to Akure is ₦1,500, total ₦31,500. Would you like to proceed?' }
+      ],
+      db,
+      options: {
+        sessionId: 'affirmative-session',
+        apiKey: 'test-key',
+        fetchClient: mockFetch
+      }
+    });
+
+    assert.equal(result.ok, true);
+
+    // Active reservation must exist in SQLite
+    const activeHold = db.prepare(`
+      SELECT * FROM order_reservations WHERE session_id = ? AND status = 'AWAITING_PAYMENT'
+    `).get('affirmative-session');
+    assert.ok(activeHold);
+    assert.equal(activeHold.product_id, 'rose-massager-01');
+    assert.equal(activeHold.total_amount, 31500);
+  });
+
+  test('14. Matched receipt verification automatically logs handoff record for bank alert confirmation', () => {
+    const res = create_order_reservation({
+      product_id: 'rose-massager-01',
+      state: 'Ondo',
+      city: 'Akure'
+    }, { db, sessionId: 'session-handoff-verify' });
+
+    const payResult = verify_transfer_receipt({
+      extracted_amount: 31500,
+      bank_name: 'Moniepoint MFB',
+      sender_name: 'Kikelomo Oluwatosin'
+    }, { db, sessionId: 'session-handoff-verify' });
+
+    assert.equal(payResult.ok, true);
+    assert.equal(payResult.matched, true);
+    assert.ok(payResult.handoff_id);
+
+    // Verify handoffs table contains the pending bank app verification alert
+    const handoff = db.prepare('SELECT * FROM handoffs WHERE id = ?').get(payResult.handoff_id);
+    assert.ok(handoff);
+    assert.equal(handoff.status, 'pending');
+    assert.match(handoff.reason, /verify bank app alert/i);
+    assert.match(handoff.customer_summary, /31500/);
+  });
+
+  test('15. Repeated underpaid receipt attempts trigger escalation handoff', () => {
+    const res = create_order_reservation({
+      product_id: 'rose-massager-01',
+      state: 'Ondo',
+      city: 'Akure'
+    }, { db, sessionId: 'session-repeat-underpay' });
+
+    // 1st underpayment
+    const firstPay = verify_transfer_receipt({
+      extracted_amount: 10000,
+      bank_name: 'Access Bank'
+    }, { db, sessionId: 'session-repeat-underpay' });
+    assert.equal(firstPay.ok, false);
+    assert.equal(firstPay.underpaid, true);
+    assert.equal(firstPay.escalated, undefined);
+
+    // 2nd underpayment (same session)
+    const secondPay = verify_transfer_receipt({
+      extracted_amount: 15000,
+      bank_name: 'Access Bank'
+    }, { db, sessionId: 'session-repeat-underpay' });
+    assert.equal(secondPay.ok, false);
+    assert.equal(secondPay.underpaid, true);
+    assert.equal(secondPay.escalated, true);
+    assert.match(secondPay.message, /manual review/i);
+
+    // Verify handoff was created in database
+    const handoff = db.prepare("SELECT * FROM handoffs WHERE reason LIKE '%discrepancy%' ORDER BY created_at DESC LIMIT 1").get();
+    assert.ok(handoff);
+    assert.match(handoff.customer_summary, /underpaid/i);
+  });
+
+  test('16. Customer payment dispute ("that\'s not true", "i paid") triggers escalate_to_human immediately', async () => {
+    let callStep = 0;
+    const mockFetch = async (url, opts) => {
+      callStep += 1;
+      const parsedBody = JSON.parse(opts.body);
+
+      if (callStep === 1) {
+        // Model initially gives a generic conversational reply
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                role: 'assistant',
+                content: 'I understand, let me double-check with staff.'
+              }
+            }]
+          })
+        };
+      }
+
+      // Step 2: Post-intercept escalate_to_human tool execution
+      const lastMsg = parsedBody.messages[parsedBody.messages.length - 1];
+      assert.equal(lastMsg.role, 'tool');
+      const toolOutput = JSON.parse(lastMsg.content);
+      assert.equal(toolOutput.ok, true);
+      assert.ok(toolOutput.handoff_id);
+
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: 'No problem at all ma! Let me check the alert on my bank app directly right now. Please hold on.'
+            }
+          }]
+        })
+      };
+    };
+
+    const { dispatchTextTurn } = require('../src/agent/dispatcher');
+    const result = await dispatchTextTurn({
+      text: "that's not true, i paid 6,500",
+      history: [
+        { role: 'user', content: 'Here is my receipt' },
+        { role: 'assistant', content: 'The amount does not match our order total.' }
+      ],
+      db,
+      options: {
+        sessionId: 'dispute-session',
+        apiKey: 'test-key',
+        fetchClient: mockFetch
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.escalated, true);
+    assert.match(result.reply, /bank app/i);
+
+    // Verify handoff record in database
+    const handoff = db.prepare("SELECT * FROM handoffs WHERE reason LIKE '%disputed%'").get();
+    assert.ok(handoff);
+    assert.match(handoff.customer_summary, /6,500/);
+  });
 });

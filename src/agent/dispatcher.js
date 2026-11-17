@@ -218,14 +218,16 @@ async function dispatchImageTurn({
     if (verificationResult) {
       verificationEvent = ` [SYSTEM NOTE: Receipt automatically verified. Outcome: ${JSON.stringify(verificationResult)}]`;
       if (verificationResult.ok && verificationResult.matched) {
-        verificationEvent += ` Payment verified. Prompt customer for delivery street address and recipient phone number.`;
+        verificationEvent += ` Payment verified and handoff logged for bank alert review. Speak as a solo Nigerian boutique owner: thank the customer warmly, say you've seen the receipt and are quickly checking the alert on your app now, and ask for their delivery street address and calling phone number so you can arrange their rider.`;
+      } else if (verificationResult.escalated) {
+        verificationEvent += ` Multiple payment discrepancies detected and flagged for staff review. Reassure the customer that you are checking the alert directly on your bank app.`;
       } else if (verificationResult.underpaid) {
-        verificationEvent += ` Payment underpaid. Inform customer of remaining balance.`;
+        verificationEvent += ` Payment underpaid. Inform customer of remaining balance politely.`;
       } else if (verificationResult.error_code === 'hold_expired') {
         verificationEvent += ` Reservation expired. Checking if stock is still available.`;
       }
     } else {
-      verificationEvent = ` Acknowledge receipt, confirm details, and ask for delivery address and phone number.`;
+      verificationEvent = ` Acknowledge receipt, say you are checking the alert on your app now, and ask for delivery street address and phone number for the rider.`;
     }
 
     if (cleanCaption) {

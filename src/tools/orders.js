@@ -290,6 +290,7 @@ function verify_transfer_receipt(input, { db, sessionId } = {}) {
   const paymentId = `pay_${crypto.randomUUID()}`;
 
   if (amountNum >= order.total_amount) {
+    const handoffId = `hand_${crypto.randomUUID()}`;
     const matchTx = db.transaction(() => {
       db.prepare(`
         UPDATE order_reservations
@@ -315,6 +316,14 @@ function verify_transfer_receipt(input, { db, sessionId } = {}) {
       );
 
       db.prepare(`
+        INSERT INTO handoffs (id, reason, customer_summary, status)
+        VALUES (?, 'Payment receipt matched - verify bank app alert before dispatch', ?, 'pending')
+      `).run(
+        handoffId,
+        `Order ${order.id} matched receipt of ₦${amountNum}. Bank: ${bankName || 'Unknown'}, Sender: ${senderName || 'Unknown'}`
+      );
+
+      db.prepare(`
         UPDATE sessions
         SET order_stage = 'paid',
             updated_at = CURRENT_TIMESTAMP
@@ -329,11 +338,16 @@ function verify_transfer_receipt(input, { db, sessionId } = {}) {
       matched: true,
       paid: amountNum,
       expected: order.total_amount,
-      message: 'Payment verified. Prompt customer for delivery street address and recipient phone number.'
+      handoff_id: handoffId,
+      message: 'Payment verified. Tell customer you have seen the receipt and are checking the alert on your app now, and ask for their delivery street address and calling phone number so you can arrange the rider.'
     };
   }
 
   // Underpaid case
+  const previousUnderpaidCount = db.prepare(`
+    SELECT COUNT(*) as count FROM payments WHERE session_id = ? AND status = 'underpaid'
+  `).get(effectiveSessionId)?.count || 0;
+
   const underpaidTx = db.transaction(() => {
     db.prepare(`
       INSERT INTO payments (
@@ -350,11 +364,34 @@ function verify_transfer_receipt(input, { db, sessionId } = {}) {
       receiptDate,
       rawMetadata
     );
+
+    if (previousUnderpaidCount >= 1) {
+      const handoffId = `hand_${crypto.randomUUID()}`;
+      db.prepare(`
+        INSERT INTO handoffs (id, reason, customer_summary, status)
+        VALUES (?, 'Repeated payment receipt discrepancy - requires manual review', ?, 'pending')
+      `).run(
+        handoffId,
+        `Session ${effectiveSessionId} has ${previousUnderpaidCount + 1} underpaid receipt attempts. Expected ₦${order.total_amount}, latest receipt was ₦${amountNum}.`
+      );
+    }
   });
 
   underpaidTx();
 
   const balanceDue = order.total_amount - amountNum;
+  if (previousUnderpaidCount >= 1) {
+    return {
+      ok: false,
+      underpaid: true,
+      escalated: true,
+      paid: amountNum,
+      expected: order.total_amount,
+      balance_due: balanceDue,
+      message: 'Payment underpaid repeatedly. Flagged for manual review. Assure customer you are checking the alert directly on your bank app.'
+    };
+  }
+
   return {
     ok: false,
     underpaid: true,

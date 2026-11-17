@@ -3,7 +3,16 @@ const { test, before, after } = require('node:test');
 const { openDatabase } = require('../src/db');
 const { seedTemporaryData } = require('../src/seed');
 const { createTools } = require('../src/tools');
-const { runAgentTurn, extractFallbackToolCalls, sanitizeCustomerFacingOutput, formatWhatsAppReplies } = require('../src/agent/engine');
+const {
+  runAgentTurn,
+  extractFallbackToolCalls,
+  sanitizeCustomerFacingOutput,
+  formatWhatsAppReplies,
+  extractLocationFromText,
+  extractProductFromText,
+  findProductAndLocation
+} = require('../src/agent/engine');
+const { extractSessionInferences } = require('../src/agent/session');
 const { getSystemPrompt } = require('../src/agent/prompt');
 
 let db;
@@ -500,4 +509,63 @@ test('prompt contains forbidden endearments, forbidden helpdesk scripts, and com
   assert.match(prompt, /FORBIDDEN HELPDESK SCRIPTS/);
   assert.match(prompt, /PLAYFUL PERSUASION/);
   assert.match(prompt, /COMPANION PRODUCT PAIRING/);
+});
+
+test('prompt contains no canned price traps, hardcoded numbers, or rigid script quotes', () => {
+  const prompt = getSystemPrompt();
+  // Ensure the model is not anchored to 46,000 or 35,000 in prompt text
+  assert.doesNotMatch(prompt, /46,000/, 'Prompt must not contain hardcoded ₦46,000 anchor');
+  assert.doesNotMatch(prompt, /35,000/, 'Prompt must not contain hardcoded ₦35,000 anchor');
+  assert.doesNotMatch(prompt, /"No vex jare 😄"/, 'Prompt must not contain rigid canned quotes');
+  assert.doesNotMatch(prompt, /"🏃‍♀️🏃‍♀️/, 'Prompt must not contain canned deflection scripts');
+});
+
+test('dynamic database product and location resolution works at runtime without code changes', () => {
+  // Insert a new dynamic product into SQLite
+  db.prepare(`
+    INSERT INTO products (id, name, category, description, usage_summary, retail_price, min_price, stock_quantity, search_tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('lotus-vibrator-99', 'Lotus Flower Massager', 'toys', 'Dynamic luxury massager', 'Apply and enjoy', 42000, 40000, 5, 'lotus flower floral suction pink');
+
+  // Insert a new dynamic delivery destination into SQLite
+  db.prepare(`
+    INSERT INTO deliveries (state, city, fee, estimated_days)
+    VALUES (?, ?, ?, ?)
+  `).run('Ekiti', 'Ado-Ekiti', 2500, '1-2 days');
+
+  // Verify dynamic location extraction
+  const loc = extractLocationFromText('I need delivery to Ado-Ekiti please', db);
+  assert.ok(loc, 'Should find dynamic location from deliveries table');
+  assert.equal(loc.state, 'Ekiti');
+  assert.equal(loc.city, 'Ado-Ekiti');
+
+  // Verify dynamic product extraction
+  const prodId = extractProductFromText('I want the lotus flower', db);
+  assert.equal(prodId, 'lotus-vibrator-99', 'Should dynamically resolve product from products table');
+
+  // Verify combined findProductAndLocation
+  const found = findProductAndLocation([
+    { role: 'user', content: 'I want to buy the lotus flower to Ado-Ekiti' }
+  ], null, db);
+  assert.equal(found.productId, 'lotus-vibrator-99');
+  assert.equal(found.location.state, 'Ekiti');
+  assert.equal(found.location.city, 'Ado-Ekiti');
+});
+
+test('expanded gender and kinship cues infer correct relational gender', () => {
+  const baseSession = { gender: 'unknown', referral_source: null, order_stage: 'browsing' };
+
+  // Male speaker referencing female partner
+  const maleInf1 = extractSessionInferences(baseSession, 'Buying this for my wifey');
+  assert.equal(maleInf1.gender, 'male');
+
+  const maleInf2 = extractSessionInferences(baseSession, 'Deliver this to my woman in Akure');
+  assert.equal(maleInf2.gender, 'male');
+
+  // Female speaker referencing male partner or honorific
+  const femaleInf1 = extractSessionInferences(baseSession, 'My hubby asked me to check this out');
+  assert.equal(femaleInf1.gender, 'female');
+
+  const femaleInf2 = extractSessionInferences(baseSession, 'Call me madam please');
+  assert.equal(femaleInf2.gender, 'female');
 });
