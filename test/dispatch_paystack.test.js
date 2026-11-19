@@ -473,14 +473,14 @@ test('10. create_paystack_link: falls back gracefully to merchant Paystack store
   db.close();
 });
 
-test('11. create_paystack_link: auto-books order reservation when none exists if product and location are provided or in session', async () => {
+test('11. create_paystack_link: auto-books order reservation when none exists if product and location are provided explicitly', async () => {
   const db = createTestDb();
   const sessionId = 'test-session-auto-book';
 
-  // Seed session with delivery state but NO active order hold
+  // Session exists but has NO delivery_state — location must come from call args
   db.prepare(`
-    INSERT INTO sessions (session_id, delivery_state, delivery_city, order_stage)
-    VALUES (?, 'Lagos', 'Ikeja', 'browsing')
+    INSERT INTO sessions (session_id, order_stage)
+    VALUES (?, 'browsing')
   `).run(sessionId);
 
   let capturedInitPayload = null;
@@ -503,9 +503,9 @@ test('11. create_paystack_link: auto-books order reservation when none exists if
     fallbackEmailDomain: 'kikkycare.ng'
   };
 
-  // Customer called create_paystack_link with product_id (or from history) when no reservation was created yet
+  // Customer calls create_paystack_link with explicit product_id and state
   const result = await create_paystack_link(
-    { product_id: 'wellness-gel-03' },
+    { product_id: 'wellness-gel-03', state: 'Lagos', city: 'Ikeja' },
     { db, sessionId, config: testConfig, fetchClient: mockFetch }
   );
 
@@ -514,7 +514,7 @@ test('11. create_paystack_link: auto-books order reservation when none exists if
   assert.ok(result.reference.startsWith('kikky_'));
   assert.ok(result.order_id.startsWith('ord_'));
 
-  // Verify the reservation was actually created in SQLite
+  // Verify the reservation was actually created in SQLite with the explicitly provided state
   const orderRow = db.prepare('SELECT * FROM order_reservations WHERE id = ?').get(result.order_id);
   assert.ok(orderRow);
   assert.equal(orderRow.session_id, sessionId);

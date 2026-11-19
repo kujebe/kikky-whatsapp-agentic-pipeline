@@ -94,6 +94,7 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
       delivery_city TEXT,
       delivery_fee INTEGER NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),
       total_amount INTEGER NOT NULL CHECK (total_amount >= 0),
+      items_json TEXT,
       hold_expires_at DATETIME NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -138,6 +139,50 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
     CREATE INDEX IF NOT EXISTS idx_payments_session ON payments(session_id);
     CREATE INDEX IF NOT EXISTS idx_dispatches_order ON dispatches(order_id);
     CREATE INDEX IF NOT EXISTS idx_dispatches_session ON dispatches(session_id);
+
+    -- Stage 6: Baileys WhatsApp Integration tables
+    CREATE TABLE IF NOT EXISTS baileys_auth (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS processed_messages (
+      message_id TEXT PRIMARY KEY,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wa_messages_store (
+      id           TEXT PRIMARY KEY,
+      remote_jid   TEXT,
+      message_json TEXT,
+      created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS inbound_buffer (
+      id           TEXT PRIMARY KEY,
+      session_id   TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status       TEXT DEFAULT 'pending',
+      created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS lid_mappings (
+      lid_jid   TEXT PRIMARY KEY,
+      phone_jid TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      message_json TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_inbound_buffer_session ON inbound_buffer(session_id, status);
+    CREATE INDEX IF NOT EXISTS idx_wa_store_jid ON wa_messages_store(remote_jid);
+    CREATE INDEX IF NOT EXISTS idx_processed_messages_created ON processed_messages(created_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_history_session ON chat_history(session_id, id);
   `);
 
   // Migrate existing payments table if reference column is missing
@@ -177,6 +222,24 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
   if (!productColumns.some(column => column.name === 'search_tags')) {
     db.exec('ALTER TABLE products ADD COLUMN search_tags TEXT');
   }
+  if (!productColumns.some(column => column.name === 'image_path')) {
+    db.exec('ALTER TABLE products ADD COLUMN image_path TEXT');
+  }
+
+  // Stage 6: add muted_until to sessions if missing
+  const sessionCols = db.prepare('PRAGMA table_info(sessions)').all();
+  if (!sessionCols.some(c => c.name === 'muted_until')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN muted_until DATETIME');
+  }
+
+  // Multi-item bundle support: add items_json to order_reservations if missing
+  const orderCols = db.prepare('PRAGMA table_info(order_reservations)').all();
+  if (!orderCols.some(c => c.name === 'items_json')) {
+    db.exec('ALTER TABLE order_reservations ADD COLUMN items_json TEXT');
+  }
+  if (!orderCols.some(c => c.name === 'reminder_sent_at')) {
+    db.exec('ALTER TABLE order_reservations ADD COLUMN reminder_sent_at DATETIME');
+  }
 
   const ftsColumns = db.prepare('PRAGMA table_info(products_fts)').all();
   if (ftsColumns.length > 0 && !ftsColumns.some(column => column.name === 'search_tags')) {
@@ -213,4 +276,61 @@ function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
   return db;
 }
 
-module.exports = { DEFAULT_DB_PATH, openDatabase };
+function getSessionHistory(db, sessionId, limit = 30) {
+  if (!db || !sessionId) return [];
+  try {
+    const rows = db.prepare(`
+      SELECT message_json
+      FROM chat_history
+      WHERE session_id = ?
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(sessionId, limit);
+
+    return rows.reverse().map(r => {
+      try {
+        return JSON.parse(r.message_json);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function saveSessionHistory(db, sessionId, messages, limit = 30) {
+  if (!db || !sessionId || !Array.isArray(messages)) return;
+  try {
+    const toSave = messages.filter(m => m && m.role !== 'system');
+    const recent = toSave.slice(-limit);
+
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM chat_history WHERE session_id = ?').run(sessionId);
+      const insert = db.prepare('INSERT INTO chat_history (session_id, message_json) VALUES (?, ?)');
+      for (const msg of recent) {
+        insert.run(sessionId, JSON.stringify(msg));
+      }
+    });
+    tx();
+  } catch {
+    // non-fatal
+  }
+}
+
+function clearSessionHistory(db, sessionId) {
+  if (!db || !sessionId) return;
+  try {
+    db.prepare('DELETE FROM chat_history WHERE session_id = ?').run(sessionId);
+  } catch {
+    // non-fatal
+  }
+}
+
+module.exports = {
+  DEFAULT_DB_PATH,
+  openDatabase,
+  getSessionHistory,
+  saveSessionHistory,
+  clearSessionHistory
+};

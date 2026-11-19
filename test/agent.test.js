@@ -73,7 +73,7 @@ test('prompt and tools export valid operational definitions', () => {
   assert.match(prompt, /Moniepoint/);
 
   const tools = getToolDefinitions();
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 9);
   const toolNames = tools.map(t => t.function.name).sort();
   assert.deepEqual(toolNames, [
     'calculate_shipping',
@@ -83,6 +83,7 @@ test('prompt and tools export valid operational definitions', () => {
     'get_product_details',
     'record_waitlist_request',
     'search_catalog',
+    'update_order_fulfillment',
     'verify_transfer_receipt'
   ]);
 });

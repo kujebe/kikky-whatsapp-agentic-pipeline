@@ -44,9 +44,22 @@ async function dispatchTextTurn({
         FROM order_reservations r
         LEFT JOIN products p ON r.product_id = p.id
         WHERE r.session_id = ? AND r.status = 'AWAITING_PAYMENT'
+          AND datetime(r.hold_expires_at) > datetime('now')
         ORDER BY r.created_at DESC
         LIMIT 1
       `).get(session.session_id);
+
+      if (activeReservation?.items_json) {
+        try {
+          const items = JSON.parse(activeReservation.items_json);
+          if (Array.isArray(items) && items.length > 0) {
+            activeReservation.items = items;
+            activeReservation.product_name = items.map(i => `${i.name || i.product_id}${i.quantity > 1 ? ` (x${i.quantity})` : ''}`).join(' + ');
+          }
+        } catch {
+          // ignore parse error
+        }
+      }
     } catch {
       activeReservation = null;
     }
@@ -78,6 +91,23 @@ async function dispatchTextTurn({
       }
     }
 
+    // Surface product image_path if any search_catalog step returned one
+    let media = null;
+    if (Array.isArray(turnResult.steps)) {
+      for (const step of turnResult.steps) {
+        if (
+          step.tool === 'search_catalog' &&
+          step.output?.ok &&
+          Array.isArray(step.output.products) &&
+          step.output.products.length === 1 &&
+          step.output.products[0].image_path
+        ) {
+          media = { image_path: step.output.products[0].image_path, caption: turnResult.reply };
+          break;
+        }
+      }
+    }
+
     return {
       ok: true,
       reply: turnResult.reply,
@@ -85,7 +115,8 @@ async function dispatchTextTurn({
       messages: turnResult.messages,
       steps: turnResult.steps,
       escalated: turnResult.escalated,
-      session: updatedSession
+      session: updatedSession,
+      ...(media ? { media } : {})
     };
   } catch (error) {
     return {

@@ -138,13 +138,12 @@ test('formatWatTime correctly computes West Africa Time and period of day', () =
 });
 
 test('getSystemPrompt dynamically injects live WAT time and session state', () => {
+  // Test 1: session-level context (without delivery location — now lives in order_reservations)
   const prompt = getSystemPrompt({
     session: {
       gender: 'male',
       order_stage: 'awaiting_payment',
-      referral_source: 'TikTok',
-      delivery_state: 'Ondo',
-      delivery_city: 'Akure'
+      referral_source: 'TikTok'
     },
     timeWat: {
       timeString: '15:00 WAT',
@@ -160,7 +159,8 @@ test('getSystemPrompt dynamically injects live WAT time and session state', () =
   assert.match(prompt, /Detected Gender: male/);
   assert.match(prompt, /Order Stage: awaiting_payment/);
   assert.match(prompt, /Referral Source: TikTok/);
-  assert.match(prompt, /Delivery Destination: Ondo, Akure/);
+  // Delivery destination is intentionally NOT in session context — it lives in activeReservation
+  assert.doesNotMatch(prompt, /Delivery Destination: Ondo/);
   assert.match(prompt, /Existing Turns in Chat: 3/);
   assert.match(prompt, /PRICE SHOCK/i);
   assert.match(prompt, /INVENTORY PRIVACY/i);
@@ -169,6 +169,27 @@ test('getSystemPrompt dynamically injects live WAT time and session state', () =
   assert.match(prompt, /SOFT DISCOUNT INQUIRY/);
   assert.match(prompt, /CART HESITATION RECOVERY/);
   assert.match(prompt, /PAYMENT BEFORE DISPATCH RULE/);
+
+  // Test 2: activeReservation context surfaces delivery destination correctly
+  const promptWithOrder = getSystemPrompt({
+    session: { gender: 'female', order_stage: 'awaiting_payment' },
+    timeWat: { timeString: '12:00 WAT', dayName: 'Monday', periodOfDay: 'Morning', hours: 12 },
+    historyCount: 1,
+    activeReservation: {
+      product_name: 'Rose Massager',
+      product_id: 'rose-massager-01',
+      quantity: 1,
+      unit_price: 15000,
+      delivery_fee: 3500,
+      total_amount: 18500,
+      delivery_state: 'Ondo',
+      delivery_city: 'Akure',
+      hold_expires_at: '2026-11-18 20:00:00'
+    }
+  });
+
+  assert.match(promptWithOrder, /Destination: Ondo, Akure/);
+  assert.match(promptWithOrder, /Total: ₦18500/);
 });
 
 test('formatWhatsAppReplies cleanly divides paragraphs into separate chat bubbles', () => {

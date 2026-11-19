@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const defaultConfig = require('../config');
 const { create_order_reservation } = require('./orders');
 
@@ -21,8 +22,8 @@ async function create_paystack_link(input = {}, { db, sessionId, config: customC
   // Auto-reservation: If no active hold exists, book it automatically from input, session, or recent history
   if (!order) {
     const session = db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(effectiveSessionId);
-    const targetState = input.state?.trim() || session?.delivery_state?.trim();
-    const targetCity = input.city?.trim() || session?.delivery_city?.trim() || undefined;
+    const targetState = input.state?.trim();
+    const targetCity = input.city?.trim() || undefined;
     let targetProductId = input.product_id?.trim();
 
     if (!targetProductId && session?.active_cart_json && session.active_cart_json !== '{}') {
@@ -35,6 +36,7 @@ async function create_paystack_link(input = {}, { db, sessionId, config: customC
     }
 
     if (!targetProductId) {
+      // Look in any reservation (including EXPIRED/CANCELLED) for this session
       const pastHold = db.prepare(`
         SELECT product_id FROM order_reservations
         WHERE session_id = ?
@@ -46,13 +48,22 @@ async function create_paystack_link(input = {}, { db, sessionId, config: customC
       }
     }
 
-    if (targetProductId && targetState) {
-      const resResult = create_order_reservation({
-        product_id: targetProductId,
-        state: targetState,
-        city: targetCity,
-        quantity: input.quantity || 1
-      }, { db, sessionId: effectiveSessionId });
+    // Do NOT fall back to past order delivery_state — that could be a stale location
+    // from a previous unrelated purchase. The customer must provide their current destination
+    // before card payment auto-reservation, or it will be held as PENDING.
+
+    if (targetProductId) {
+      const resArgs = { quantity: input.quantity || 1 };
+      if (Array.isArray(input.items) && input.items.length > 0) {
+        resArgs.items = input.items;
+      } else {
+        resArgs.product_id = targetProductId;
+      }
+      if (targetState) {
+        resArgs.state = targetState;
+        if (targetCity) resArgs.city = targetCity;
+      }
+      const resResult = create_order_reservation(resArgs, { db, sessionId: effectiveSessionId });
 
       if (resResult?.ok && resResult.order_id) {
         order = db.prepare('SELECT * FROM order_reservations WHERE id = ?').get(resResult.order_id);
@@ -71,7 +82,8 @@ async function create_paystack_link(input = {}, { db, sessionId, config: customC
   const prod = db.prepare('SELECT name FROM products WHERE id = ?').get(order.product_id);
   const productName = prod?.name || order.product_id;
 
-  const reference = `kikky_${order.id}_${Date.now()}`;
+  // Always generate a fresh unique reference — Paystack rejects re-used references
+  const reference = `kikky_${order.id}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
   const storeId = effectiveConfig.storeId || 'kikky_luxuryfemcare';
   const fallbackUrl = effectiveConfig.paystackPaymentUrl || `https://paystack.com/pay/${storeId}`;
 

@@ -71,7 +71,7 @@ const BASE_TOOL_DEFINITIONS = [
         properties: {
           day: {
             type: 'string',
-            description: 'Day of the week name, or relative terms like today or tomorrow. If omitted, checks current day.'
+            description: 'Day of the week name, or relative terms such as today or tomorrow. If omitted, checks current day.'
           }
         },
         additionalProperties: false
@@ -112,7 +112,7 @@ const BASE_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'create_order_reservation',
-      description: 'Reserve inventory for 45 minutes, calculate shipping fee, and lock in the total amount for an order. MANDATORY: You must call this tool whenever a customer confirms they want to buy a product and states their delivery location. Returns order summary, exact total amount, and Moniepoint payment details.',
+      description: 'Reserve inventory for 45 minutes and lock in order hold in the database. Supports single products or multi-item bundles, store pickup (fee ₦0), doorstep delivery, or pre-address holds, and appending to an active hold when add_to_order is true. MANDATORY: You must call this tool whenever a customer confirms they want to buy or hold a product. Returns order summary, exact total amount, and Moniepoint payment details.',
       parameters: {
         type: 'object',
         properties: {
@@ -120,9 +120,36 @@ const BASE_TOOL_DEFINITIONS = [
             type: 'string',
             description: 'The unique product identifier code or name from the catalog.'
           },
+          items: {
+            type: 'array',
+            description: 'List of product items to reserve together in a combined order bundle.',
+            items: {
+              type: 'object',
+              properties: {
+                product_id: {
+                  type: 'string',
+                  description: 'The product identifier code or name.'
+                },
+                quantity: {
+                  type: 'integer',
+                  description: 'Quantity of this item. Defaults to 1.'
+                }
+              },
+              required: ['product_id'],
+              additionalProperties: false
+            }
+          },
+          add_to_order: {
+            type: 'boolean',
+            description: 'Set to true when appending an additional item to an existing active reservation or cart.'
+          },
+          pickup: {
+            type: 'boolean',
+            description: 'Set to true when the customer chooses in-store pickup at Shop 32A Justrite Mall Akure (delivery fee is ₦0).'
+          },
           state: {
             type: 'string',
-            description: 'Destination Nigerian state name explicitly stated by the customer.'
+            description: 'Destination Nigerian state name. Optional if store pickup or if customer has not yet provided delivery destination.'
           },
           city: {
             type: 'string',
@@ -130,10 +157,34 @@ const BASE_TOOL_DEFINITIONS = [
           },
           quantity: {
             type: 'integer',
-            description: 'Quantity of items to purchase. Defaults to 1 if omitted.'
+            description: 'Quantity of items to purchase for single-product reservation. Defaults to 1 if omitted.'
           }
         },
-        required: ['product_id', 'state'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_order_fulfillment',
+      description: 'Update the fulfillment method (in-store pickup or delivery location) for an existing active order hold. Call this tool when a customer with an active reservation switches to store pickup or confirms/changes their delivery state/city. This tool NEVER changes the products or quantities in the cart.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pickup: {
+            type: 'boolean',
+            description: 'Set to true when the customer switches to in-store pickup at Shop 32A Justrite Mall Akure (shipping fee is ₦0).'
+          },
+          state: {
+            type: 'string',
+            description: 'Destination Nigerian state name for shipping delivery.'
+          },
+          city: {
+            type: 'string',
+            description: 'Optional destination town or city within the state.'
+          }
+        },
         additionalProperties: false
       }
     }

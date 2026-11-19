@@ -57,7 +57,7 @@ function searchWithLike(db, terms, maxPrice) {
 
   parameters.maxPrice = maxPrice ?? null;
   const andRows = db.prepare(`
-    SELECT id, name, category, retail_price, stock_quantity
+    SELECT id, name, category, retail_price, stock_quantity, image_path
     FROM products
     WHERE ${wordConditions.join(' AND ')}
       AND (@maxPrice IS NULL OR retail_price <= @maxPrice)
@@ -69,7 +69,7 @@ function searchWithLike(db, terms, maxPrice) {
 
   const matchScoreSql = wordConditions.map(cond => `(CASE WHEN ${cond} THEN 1 ELSE 0 END)`).join(' + ');
   return db.prepare(`
-    SELECT id, name, category, retail_price, stock_quantity
+    SELECT id, name, category, retail_price, stock_quantity, image_path
     FROM products
     WHERE (${wordConditions.join(' OR ')})
       AND (@maxPrice IS NULL OR retail_price <= @maxPrice)
@@ -91,7 +91,7 @@ function createCatalogTools(db) {
 
         const andQuery = makeFtsQuery(terms, 'AND');
         let ftsRows = db.prepare(`
-          SELECT p.id, p.name, p.category, p.retail_price, p.stock_quantity
+          SELECT p.id, p.name, p.category, p.retail_price, p.stock_quantity, p.image_path
           FROM products_fts
           JOIN products AS p ON p.rowid = products_fts.rowid
           WHERE products_fts MATCH @ftsQuery
@@ -132,7 +132,7 @@ function createCatalogTools(db) {
       try {
         const product = db.prepare(`
           SELECT id, name, category, description, usage_summary,
-                 retail_price, stock_quantity
+                 retail_price, stock_quantity, image_path
           FROM products
           WHERE id = ?
         `).get(parsed.data.product_id);

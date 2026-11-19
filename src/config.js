@@ -42,6 +42,14 @@ const paystackCallbackUrl = process.env.PAYSTACK_CALLBACK_URL || '';
 
 const bankDetailsString = process.env.STORE_PAYMENT_ACCOUNT || `${bankAccount.accountNumber} ${bankAccount.bankName} ${bankAccount.accountName}`;
 
+// Stage 6: WhatsApp Bot
+const staffAlertJid = process.env.STAFF_ALERT_JID || '';
+const humanMuteHours = parseInt(process.env.HUMAN_MUTE_HOURS || '2', 10);
+const whatsappAuthId = process.env.WHATSAPP_AUTH_ID || 'kikky_main';
+const logLevel = process.env.LOG_LEVEL || 'warn';
+const debounceQuietMs = parseInt(process.env.DEBOUNCE_QUIET_MS || '10000', 10);
+const debounceMaxWaitMs = parseInt(process.env.DEBOUNCE_MAX_WAIT_MS || '15000', 10);
+
 function formatBankDetails() {
   return `Bank: ${bankAccount.bankName}\nAccount Name: ${bankAccount.accountName}\nAccount Number: ${bankAccount.accountNumber}`;
 }
@@ -60,5 +68,11 @@ module.exports = {
   paystackWebhookPort,
   paystackCallbackUrl,
   paystackPaymentUrl,
-  formatBankDetails
+  formatBankDetails,
+  staffAlertJid,
+  humanMuteHours,
+  whatsappAuthId,
+  logLevel,
+  debounceQuietMs,
+  debounceMaxWaitMs
 };

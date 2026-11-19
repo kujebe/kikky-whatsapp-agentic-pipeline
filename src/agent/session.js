@@ -140,15 +140,9 @@ function extractSessionInferences(currentSession, userText = '', agentReply = ''
     updates.notes = 'urgent_hospitality_location';
   }
 
-  // 4. Shipping / Delivery location detection
-  for (const step of steps) {
-    if (step.tool === 'calculate_shipping' && step.input?.state) {
-      updates.delivery_state = step.input.state;
-      if (step.input.city) {
-        updates.delivery_city = step.input.city;
-      }
-    }
-  }
+  // 4. Shipping / Delivery location detection (intentionally NOT written to sessions)
+  // Delivery location belongs exclusively to order_reservations. Writing it to the long-lived
+  // session row would cause it to bleed into future unrelated orders from the same phone number.
 
   // 5. Order stage transitions
   const hasReservationTool = steps.some(s => s.tool === 'create_order_reservation' && s.output?.ok);

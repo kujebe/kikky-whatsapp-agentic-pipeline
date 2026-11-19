@@ -29,7 +29,7 @@ function extractOrderId(data) {
   }
 
   if (typeof data.reference === 'string') {
-    const match = data.reference.match(/^kikky_(order_[a-f0-9-]+)(?:_\d+)?$/i);
+    const match = data.reference.match(/^kikky_(ord_[a-f0-9-]+)(?:_[a-f0-9]+)?$/i);
     if (match) {
       return match[1];
     }
@@ -38,7 +38,7 @@ function extractOrderId(data) {
   return null;
 }
 
-function handlePaystackPayload({ payload, signature, rawBody, db, config = defaultConfig }) {
+function handlePaystackPayload({ payload, signature, rawBody, db, config = defaultConfig, onPaymentVerified = null }) {
   if (!db) {
     return { ok: false, status: 500, error: 'Database required' };
   }
@@ -161,8 +161,7 @@ function handlePaystackPayload({ payload, signature, rawBody, db, config = defau
       `).run(order.session_id);
 
       resultStatus = 'payment_verified';
-    } else {
-      db.prepare(`
+    } else {      db.prepare(`
         INSERT INTO payments (id, order_id, session_id, amount, bank_name, sender_name, status, reference, raw_metadata)
         VALUES (?, ?, ?, ?, 'Paystack', ?, 'underpaid', ?, ?)
       `).run(paymentId, order.id, order.session_id, paidNgn, senderName, reference, JSON.stringify(paymentData));
@@ -173,10 +172,27 @@ function handlePaystackPayload({ payload, signature, rawBody, db, config = defau
 
   tx();
 
+  if (resultStatus === 'payment_verified' && typeof onPaymentVerified === 'function') {
+    const verifiedOrder = db.prepare('SELECT session_id, total_amount FROM order_reservations WHERE id = ?').get(orderId);
+    if (verifiedOrder) {
+      setImmediate(() => {
+        try {
+          onPaymentVerified(verifiedOrder.session_id, {
+            order_id: orderId,
+            amount_ngn: paidNgn,
+            reference
+          });
+        } catch (callbackErr) {
+          console.error('[WEBHOOK] onPaymentVerified callback error:', callbackErr.message);
+        }
+      });
+    }
+  }
+
   return { ok: true, status: 200, result: resultStatus, reference };
 }
 
-function createWebhookServer({ db, config = defaultConfig }) {
+function createWebhookServer({ db, config = defaultConfig, onPaymentVerified = null }) {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -211,7 +227,8 @@ function createWebhookServer({ db, config = defaultConfig }) {
         signature,
         rawBody,
         db,
-        config
+        config,
+        onPaymentVerified
       });
 
       res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
@@ -222,9 +239,9 @@ function createWebhookServer({ db, config = defaultConfig }) {
   return server;
 }
 
-function startWebhookServer({ db, config = defaultConfig, port = config.paystackWebhookPort || 3001 } = {}) {
+function startWebhookServer({ db, config = defaultConfig, port = config.paystackWebhookPort || 3001, onPaymentVerified = null } = {}) {
   const activeDb = db || openDatabase();
-  const server = createWebhookServer({ db: activeDb, config });
+  const server = createWebhookServer({ db: activeDb, config, onPaymentVerified });
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);

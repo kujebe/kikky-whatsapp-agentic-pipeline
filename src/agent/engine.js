@@ -175,7 +175,7 @@ function extractFallbackToolCalls(content = '') {
           return { calls, cleanText };
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // 2. Check for XML tag: <tool_call>...</tool_call>
@@ -195,7 +195,7 @@ function extractFallbackToolCalls(content = '') {
         const cleanText = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
         return { calls, cleanText };
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // 3. Check for bare JSON array: [{"name": "..."}]
@@ -217,7 +217,7 @@ function extractFallbackToolCalls(content = '') {
         const cleanText = (content.slice(0, bareMatch.index) + content.slice(bareMatch.index + bareMatch[0].length)).trim();
         return { calls, cleanText };
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   return { calls: null, cleanText: content };
@@ -256,8 +256,11 @@ function sanitizeCustomerFacingOutput(rawText = '', options = {}) {
     .replace(/\[TOOL_CALLS\]\s*\[[\s\S]*?\]\s*/g, '')
     // Strip any residual bare [TOOL_CALLS] prefix without an array
     .replace(/\[TOOL_CALLS\]/g, '')
-    // Strip XML tool call blocks
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    // Strip XML tool call blocks (including unclosed tags at stream end)
+    .replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi, '')
+    .replace(/<\/?tool_call>/gi, '')
+    .replace(/<tool_response>[\s\S]*?(?:<\/tool_response>|$)/gi, '')
+    .replace(/<\/?tool_response>/gi, '')
     // Strip <think> reasoning blocks
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     // Strip bare JSON tool call arrays [{\"name\":...}]
@@ -353,7 +356,8 @@ const FALLBACK_PRODUCTS = [
   { pattern: /\bbullet\b|\bpocket\b/i, id: 'pocket-massager-02' },
   { pattern: /\b(?:gel|lube|lubricant)\b/i, id: 'wellness-gel-03' },
   { pattern: /\b(?:cards?|date night)\b/i, id: 'couples-cards-04' },
-  { pattern: /\bdildo\b|\bsilicone\b/i, id: 'silicone-accessory-05' },
+  { pattern: /\bmanual\b/i, id: 'silicone-accessory-05' },
+  { pattern: /\bvibrating\b|\bwellness\b/i, id: 'vibrating-accessory-06' },
   { pattern: /\bwand\b/i, id: 'wand-massager-07' },
   { pattern: /\bdual\b|\brabbit\b/i, id: 'dual-massager-08' },
   { pattern: /\b(?:bdsm|restraint)\b/i, id: 'bdsm-mini-kit-09' },
@@ -384,7 +388,8 @@ function getDynamicLocations(db = null) {
 const GENERIC_CATALOG_WORDS = new Set([
   'the', 'and', 'for', 'with', 'toy', 'toys', 'adult', 'vibrator', 'vibrater',
   'vibrators', 'vibraters', 'massager', 'massagers', 'personal', 'care', 'flower',
-  'item', 'device', 'luxury', 'intimate', 'rechargeable', 'premium'
+  'item', 'device', 'luxury', 'intimate', 'rechargeable', 'premium',
+  'mini', 'small', 'set', 'kit', 'pack'
 ]);
 
 function getDynamicProducts(db = null) {
@@ -452,27 +457,30 @@ function extractProductFromText(text, db = null) {
 function findProductAndLocation(messages = [], session = null, db = null) {
   let location = null;
   let productId = null;
+  const productIds = [];
 
-  if (session?.delivery_state) {
-    location = {
-      state: session.delivery_state,
-      city: session.delivery_city || null
-    };
-  }
-
-  const reversed = [...messages].reverse();
-  for (const m of reversed) {
+  // Strictly scan customer messages within the last 6 turns.
+  // Never scan assistant messages or raw tool payloads to prevent bot dialogue from polluting customer intent.
+  const userMessages = [...messages].reverse().filter(m => m.role === 'user').slice(0, 6);
+  for (const m of userMessages) {
     const text = m.content || '';
     if (!location) {
       location = extractLocationFromText(text, db);
     }
-    if (!productId) {
-      productId = extractProductFromText(text, db);
+    const pid = extractProductFromText(text, db);
+    if (pid && !productIds.includes(pid)) {
+      productIds.push(pid);
     }
-    if (location && productId) break;
+    if (!productId && pid) {
+      productId = pid;
+    }
   }
 
-  return { location, productId };
+  // Delivery location is derived exclusively from current turn messages.
+  // Never fall back to sessions.delivery_state — that field is stale and can pollute future orders
+  // from a different context (e.g. customer who shipped to Ibadan last month now buying a gift for Abuja).
+
+  return { location, productId, productIds };
 }
 
 async function runAgentTurn({
@@ -560,43 +568,134 @@ async function runAgentTurn({
         .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       const paymentPattern = paymentTokens.length > 0 ? paymentTokens.join('|') : '5140099034|Moniepoint';
       const claimsReservation = new RegExp(`(?:I've|I have|have)\\s+reserved|reserved\\s+(?:the|your)|please transfer|transfer\\s+₦?[\\d,]+|${paymentPattern}`, 'i').test(assistantText);
-      const hasBuyIntent = /(?:buy|order|purchase|reserve|get me|deliver to|send to)\b/i.test(lastUserMsg);
+      const hasBuyIntent = /(?:buy|order|purchase|reserve|get me|deliver to|send to|make it|give me|take|want)\b/i.test(lastUserMsg);
       const isAffirmative = /^(?:yes|proceed|oya|ok|confirm|sure|make I pay)\b/i.test(lastUserMsg.trim());
+      const hasQuantityIntent = /\b(?:make\s+it\s+\d+|\d+\s*(?:pieces|pcs|units|items)|(?:give|send|get)\s+me\s+\d+)\b/i.test(lastUserMsg);
       const allText = messages.map(m => m.content || '').join(' ') + ' ' + assistantText;
-      const hasOrderIntent = claimsReservation || hasBuyIntent || (isAffirmative && /order|buy|reserve|deliver|total|price/i.test(allText));
+      const hasOrderIntent = claimsReservation || hasBuyIntent || hasQuantityIntent || (isAffirmative && /order|buy|reserve|deliver|total|price/i.test(allText));
 
-      const { location: orderLocation, productId: orderProductId } = findProductAndLocation(messages, session, db);
+      const { location: orderLocation, productId: orderProductId, productIds } = findProductAndLocation(messages, session, db);
       const wantsCard = /(?:card|paystack|payment link|online payment)\b/i.test(lastUserMsg);
 
-      if (hasOrderIntent && orderLocation && orderProductId && !options.activeReservation) {
+      const hasAddIntent = /(?:add|include|also get|also want|plus|combine|attach)\b/i.test(lastUserMsg);
+      const assistantClaimsAdding = /(?:adding|added)\s+(?:the|your|\b)/i.test(assistantText);
+      const addedProductId = extractProductFromText(lastUserMsg, db);
+      const isPickup = /(?:pick\s*up|pick\s*it\s*up|come\s*to\s*(?:the\s*)?shop|walk\s*in|store\s*pickup|collect\s*(?:in\s*person|at\s*shop))/i.test(lastUserMsg + ' ' + assistantText);
+
+      const qtyMatch = lastUserMsg.match(/\b(?:make\s+it\s+|need\s+|want\s+|order\s+|give\s+me\s+)?(\d+)\s*(?:pieces|pcs|units|items)?\b/i);
+      let parsedOrderQty = 1;
+      if (qtyMatch && parseInt(qtyMatch[1], 10) > 0) {
+        parsedOrderQty = parseInt(qtyMatch[1], 10);
+      }
+
+      if (options.activeReservation && addedProductId && (hasAddIntent || assistantClaimsAdding)) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted unfulfilled add-to-order intent, promoting to create_order_reservation with add_to_order');
+        toolCalls = [{
+          id: `call_lazy_add_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'create_order_reservation',
+            arguments: JSON.stringify({
+              product_id: addedProductId,
+              add_to_order: true,
+              state: options.activeReservation.state || orderLocation?.state,
+              city: options.activeReservation.city || orderLocation?.city || undefined,
+              quantity: 1
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else if (options.activeReservation && hasQuantityIntent && parsedOrderQty > 0) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted quantity update on active reservation');
+        toolCalls = [{
+          id: `call_lazy_res_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'create_order_reservation',
+            arguments: JSON.stringify({
+              product_id: options.activeReservation.product_id || orderProductId,
+              quantity: parsedOrderQty,
+              pickup: isPickup || options.activeReservation.delivery_state === 'PICKUP',
+              state: options.activeReservation.delivery_state !== 'PICKUP' && options.activeReservation.delivery_state !== 'PENDING' ? options.activeReservation.delivery_state : (orderLocation?.state || undefined),
+              city: options.activeReservation.delivery_city || orderLocation?.city || undefined
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else if (options.activeReservation && isPickup) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted pickup confirmation on active reservation, updating to pickup via update_order_fulfillment');
+        toolCalls = [{
+          id: `call_lazy_res_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'update_order_fulfillment',
+            arguments: JSON.stringify({
+              pickup: true
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else if (options.activeReservation && orderLocation && (options.activeReservation.state === 'PENDING' || options.activeReservation.state === 'PICKUP')) {
+        logDiagnostic(debug, 'INTERCEPT', 'Intercepted destination confirmation on active reservation, updating destination via update_order_fulfillment');
+        toolCalls = [{
+          id: `call_lazy_res_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'update_order_fulfillment',
+            arguments: JSON.stringify({
+              state: orderLocation.state,
+              city: orderLocation.city || undefined
+            })
+          }
+        }];
+        assistantMessage.tool_calls = toolCalls;
+        assistantMessage.content = null;
+      } else if (hasOrderIntent && (orderProductId || (productIds && productIds.length > 0)) && !options.activeReservation) {
         if (wantsCard) {
           logDiagnostic(debug, 'INTERCEPT', 'Intercepted card order confirmation, promoting to create_paystack_link with auto-reservation');
+          const paystackArgs = {
+            state: isPickup ? 'PICKUP' : (orderLocation?.state || 'PENDING'),
+            city: isPickup ? 'STORE_PICKUP' : (orderLocation?.city || undefined),
+            quantity: parsedOrderQty
+          };
+          if (productIds && productIds.length > 1) {
+            paystackArgs.items = productIds.map(id => ({ product_id: id, quantity: parsedOrderQty }));
+          } else {
+            paystackArgs.product_id = orderProductId;
+          }
           toolCalls = [{
             id: `call_lazy_pay_${Date.now()}`,
             type: 'function',
             function: {
               name: 'create_paystack_link',
-              arguments: JSON.stringify({
-                product_id: orderProductId,
-                state: orderLocation.state,
-                city: orderLocation.city || undefined,
-                quantity: 1
-              })
+              arguments: JSON.stringify(paystackArgs)
             }
           }];
         } else {
           logDiagnostic(debug, 'INTERCEPT', 'Intercepted unfulfilled order confirmation, promoting to create_order_reservation');
+          const reservationArgs = {
+            quantity: parsedOrderQty
+          };
+          if (productIds && productIds.length > 1) {
+            reservationArgs.items = productIds.map(id => ({ product_id: id, quantity: parsedOrderQty }));
+          } else {
+            reservationArgs.product_id = orderProductId;
+          }
+          if (isPickup) {
+            reservationArgs.pickup = true;
+          } else if (orderLocation) {
+            reservationArgs.state = orderLocation.state;
+            reservationArgs.city = orderLocation.city || undefined;
+          }
           toolCalls = [{
             id: `call_lazy_res_${Date.now()}`,
             type: 'function',
             function: {
               name: 'create_order_reservation',
-              arguments: JSON.stringify({
-                product_id: orderProductId,
-                state: orderLocation.state,
-                city: orderLocation.city || undefined,
-                quantity: 1
-              })
+              arguments: JSON.stringify(reservationArgs)
             }
           }];
         }
@@ -621,13 +720,43 @@ async function runAgentTurn({
         assistantMessage.tool_calls = toolCalls;
         assistantMessage.content = null;
       } else {
-        const isLazyCatalog = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:catalog|stock|inventory|options|price|for you)/i.test(assistantMessage.content);
-        const isLazyShipping = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:shipping|delivery|dispatch|cost|rate|fee)/i.test(assistantMessage.content);
+        const isLazyCatalog = /(?:I'll|let me|will|make I|wait make I|hold on|let'?s)\s+(?:check|see|look|find)\s+(?:what\s+we\s+have|the\s+catalog|stock|inventory|options|price|items|for you)?|let'?s\s+see\s+what\s+we\s+have|checking\s+(?:our\s+)?(?:stock|inventory|catalog)|see\s+what\s+we\s+have\s+in\s+stock/i.test(assistantMessage.content || '');
+        const isBrowsingIntent = /(?:show|see|view|display|give)\s+(?:me\s+)?(?:the\s+)?(?:options|catalog|products|items|types|stock|varieties)|what\s+(?:options|do you have|products|items|types)|(?:any|some)\s+(?:options|recommendations|suggestions)|(?:recommend|suggest)\s+(?:me\s+)?(?:some|any)?/i.test(lastUserMsg);
+        const isLazyShipping = /(?:I'll|let me|will|make I|wait make I|hold on let me)\s+check\s+(?:the\s+)?(?:shipping|delivery|dispatch|cost|rate|fee)/i.test(assistantMessage.content || '');
         const isCardPaymentInquiry = /(?:pay(?:ing)?|checkout)\s+(?:with|via|by|using)\s+card|paystack|card\s+payment|can(?:'t|\s+not)?\s+i\s+pay\s+(?:with|by)\s+(?:a\s+)?card|do\s+you\s+(?:take|accept)\s+card|send\s+(?:me\s+)?(?:a\s+)?(?:card|paystack|payment)\s+link|(?:link|paystack).*(?:expired|invalid|not working|failed|broken|try again)|(?:new|another|fresh|resend).*(?:link|payment link)/i.test(lastUserMsg);
 
-        if (isLazyCatalog) {
-          logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy catalog turn, promoting to immediate search_catalog');
-          const cleanQuery = lastUserMsg.replace(/[?!.]/g, '').replace(/^(?:some|any|what|can you suggest)\s+/i, '').trim() || 'massager';
+        if (isLazyCatalog || isBrowsingIntent) {
+          logDiagnostic(debug, 'INTERCEPT', 'Intercepted lazy or direct catalog inquiry, promoting to immediate search_catalog');
+          let cleanQuery = lastUserMsg
+            .replace(/[?!.]/g, '')
+            .replace(/^(?:can you\s+|could you\s+|please\s+|just\s+)?(?:show|see|view|display|give)\s+(?:me\s+)?(?:the\s+)?/i, '')
+            .replace(/^(?:what\s+options\s+(?:do\s+you\s+have\s+)?(?:for\s+)?|what\s+are\s+the\s+|let\s+me\s+see\s+(?:the\s+)?|what\s+do\s+you\s+have\s+(?:for\s+)?)/i, '')
+            .replace(/^(?:some|any|what|can you suggest)\s+/i, '')
+            .replace(/^(?:the\s+)+/i, '')
+            .replace(/\s+(?:first|now|please)$/i, '')
+            .trim();
+
+          if (!cleanQuery || /^(?:options?|products?|items?|types?|stock|everything|anything|all|do you have)$/i.test(cleanQuery)) {
+            const foundProd = orderProductId || extractProductFromText(lastUserMsg, db);
+            if (foundProd) {
+              const prodRow = db?.prepare('SELECT name, category FROM products WHERE id = ?').get(foundProd);
+              cleanQuery = prodRow?.name || prodRow?.category || foundProd;
+            } else {
+              for (let i = conversationHistory.length - 1; i >= 0; i--) {
+                const prevMsg = conversationHistory[i];
+                if (prevMsg.role === 'user' && prevMsg.content) {
+                  const prevProd = extractProductFromText(prevMsg.content, db);
+                  if (prevProd) {
+                    const prodRow = db?.prepare('SELECT name, category FROM products WHERE id = ?').get(prevProd);
+                    cleanQuery = prodRow?.name || prodRow?.category || prevProd;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          cleanQuery = cleanQuery || 'massager';
+
           toolCalls = [{
             id: `call_lazy_${Date.now()}`,
             type: 'function',
@@ -717,20 +846,11 @@ async function runAgentTurn({
       const parsedArgs = parseToolArguments(toolCall.function?.arguments);
 
       if (toolName === 'create_paystack_link' || toolName === 'create_order_reservation') {
-        const { location: foundLoc, productId: foundProd } = findProductAndLocation(conversationHistory, session, db);
         if (parsedArgs.product_id) {
           const resolvedProd = extractProductFromText(parsedArgs.product_id, db);
           if (resolvedProd) {
             parsedArgs.product_id = resolvedProd;
           }
-        } else if (foundProd) {
-          parsedArgs.product_id = foundProd;
-        }
-        if (!parsedArgs.state && foundLoc?.state) {
-          parsedArgs.state = foundLoc.state;
-        }
-        if (!parsedArgs.city && foundLoc?.city) {
-          parsedArgs.city = foundLoc.city;
         }
       }
 
@@ -761,6 +881,18 @@ async function runAgentTurn({
       stepRecord.durationMs = Math.round(performance.now() - startMs);
       stepRecord.output = toolResult;
       executedSteps.push(stepRecord);
+
+      if ((toolName === 'create_order_reservation' || toolName === 'update_order_fulfillment') && toolResult?.ok) {
+        options.activeReservation = {
+          product_name: toolResult.product_name || (toolResult.reservation?.items?.length > 1
+            ? toolResult.reservation.items.map(it => `${it.product_name || it.product_id} x${it.quantity}`).join(' + ')
+            : (toolResult.reservation?.product_name || toolResult.reservation?.product_id)),
+          total_amount: toolResult.total_amount || toolResult.reservation?.total_amount,
+          state: toolResult.state || toolResult.fulfillment || toolResult.reservation?.destination_state,
+          city: toolResult.city || toolResult.reservation?.destination_city || null,
+          items: toolResult.items || toolResult.reservation?.items
+        };
+      }
 
       if (toolName === 'escalate_to_human' && toolResult?.ok) {
         escalated = true;
